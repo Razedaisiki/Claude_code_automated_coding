@@ -4,6 +4,7 @@ from agent_system.agents.models import AgentResult
 from agent_system.agents.parent import ParentAgent
 from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 from agent_system.context import ProjectContext, load_context
+from agent_system.plan_parser import parse_plan
 
 
 def _load_prompt(name: str) -> str:
@@ -35,18 +36,47 @@ class ClaudeParentAgent(ParentAgent):
         plan_file.write_text(plan_text, encoding="utf-8")
         print("  plan.md created")
 
-        self._execute(plan_text, ctx)
+        tasks = parse_plan(plan_text)
+        if tasks:
+            print(f"  parsed {len(tasks)} tasks from plan")
+            for t in tasks:
+                print(f"    {t.id} [{t.role}] {t.description}")
+
+            from agent_system.agents.code_agent import CodeAgent
+            from agent_system.agents.subagent import MockTestAgent
+
+            for t in tasks:
+                print(f"  Dispatch: {t.id} -> {t.role}")
+                if t.role == "code":
+                    result = CodeAgent(root=self.root, model=self.model).execute(t)
+                else:
+                    result = MockTestAgent().execute(t)
+
+                review = self._review(t, result)
+                if review.status == "FAILED":
+                    print(f"  Review FAILED for {t.id}: {review.message}")
+                    return review
+                print(f"  Review PASSED for {t.id}")
+        else:
+            self._execute(plan_text, ctx)
 
         print("Parent finished")
         return AgentResult(
             status="SUCCESS",
-            message="plan created",
+            message="plan executed",
             artifacts=[str(plan_file)],
-            next_action="EXECUTE",
+            next_action="DONE",
         )
 
     def get_context(self) -> ProjectContext:
         return load_context(self.root)
+
+    def _review(self, task, result: AgentResult) -> AgentResult:
+        if result.status == "FAILED":
+            return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts)
+        if not result.message:
+            return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
+        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts)
 
     def _plan(self, task: str, ctx: ProjectContext) -> str:
         system = _load_prompt("parent")
