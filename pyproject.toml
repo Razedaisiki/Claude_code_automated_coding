@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Automated coding agent system"
 readme = "README.md"
 requires-python = ">=3.8"
-dependencies = []
+dependencies = [
+    "anthropic>=0.40.0",
+    "claude-agent-sdk>=0.1.0; python_version>='3.10'",
+]
 
 [project.scripts]
 xxx = "agent_system.cli:main"
