@@ -1,9 +1,15 @@
 from pathlib import Path
-from typing import Optional
 
 from agent_system.agents.parent import ParentAgent
 from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 from agent_system.context import AgentContext, load_context
+
+
+def _load_prompt(name: str) -> str:
+    bundled = Path(__file__).parent.parent / "prompts" / f"{name}.md"
+    if bundled.exists():
+        return bundled.read_text(encoding="utf-8")
+    return ""
 
 
 class ClaudeParentAgent(ParentAgent):
@@ -36,7 +42,9 @@ class ClaudeParentAgent(ParentAgent):
         return load_context(self.root)
 
     def _plan(self, task: str, ctx: AgentContext) -> str:
-        invoked = self._invoke(f"Create a development plan for this task:\n{task}\n\nRepo: {ctx.repo_info}")
+        system = _load_prompt("parent")
+        user = f"Task:\n{task}\n\nRepo: {ctx.repo_info}\n\nCLAUDE.md:\n{ctx.claude_md[:2000]}\n\nMilestones:\n{ctx.milestone[:2000]}"
+        invoked = self._invoke(system, user)
         if invoked and not invoked.startswith("mock result"):
             return f"# Plan\n\n{invoked}\n"
         first_line = task.strip().splitlines()[0] if task.strip() else "No task"
@@ -56,31 +64,34 @@ class ClaudeParentAgent(ParentAgent):
             print(f"  applying plan for: {ctx.task.strip().splitlines()[0][:60]}")
         print("  tools: read / write / bash (mock)")
 
-    def _invoke(self, task: str) -> str:
+    def _invoke(self, system: str, user: str) -> str:
         try:
             import anthropic
 
             api_key = resolve_api_key()
             if not api_key:
-                return self._fallback(task)
+                return self._fallback(user)
 
             base_url = resolve_base_url()
             if base_url:
                 client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
             else:
                 client = anthropic.Anthropic(api_key=api_key)
-            resp = client.messages.create(
+            kwargs = dict(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=1024,
-                messages=[{"role": "user", "content": task[:4000]}],
+                messages=[{"role": "user", "content": user[:6000]}],
             )
+            if system:
+                kwargs["system"] = system[:4000]
+            resp = client.messages.create(**kwargs)
             parts = []
             for block in resp.content:
                 if getattr(block, "type", None) == "text":
                     parts.append(block.text)
             return "\n".join(parts)
         except Exception as e:
-            return self._fallback(task, error=str(e))
+            return self._fallback(user, error=str(e))
 
     def _fallback(self, task: str, error: str = "") -> str:
         if error:

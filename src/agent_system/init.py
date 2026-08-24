@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 
@@ -18,9 +19,15 @@ def init_workspace(root: Path = None):
         "version: 0.1.0\nmodel: mock\n", encoding="utf-8"
     )
 
-    (prompts_dir / "parent.md").write_text("# Parent Agent Prompt\n\nYou are the parent agent.\n", encoding="utf-8")
-    (prompts_dir / "code.md").write_text("# Code Agent Prompt\n\nYou are the code agent.\n", encoding="utf-8")
-    (prompts_dir / "test.md").write_text("# Test Agent Prompt\n\nYou are the test agent.\n", encoding="utf-8")
+    src_prompts = Path(__file__).parent / "prompts"
+    if src_prompts.exists():
+        for p in src_prompts.iterdir():
+            if p.is_file():
+                shutil.copy(p, prompts_dir / p.name)
+    else:
+        (prompts_dir / "parent.md").write_text("# Parent Agent Prompt\n\nYou are the parent agent.\n", encoding="utf-8")
+        (prompts_dir / "code.md").write_text("# Code Agent Prompt\n\nYou are the code agent.\n", encoding="utf-8")
+        (prompts_dir / "test.md").write_text("# Test Agent Prompt\n\nYou are the test agent.\n", encoding="utf-8")
 
     task_file = root / "TASK.md"
     if not task_file.exists():
