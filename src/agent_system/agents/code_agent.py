@@ -37,7 +37,7 @@ class CodeAgent(SubAgent):
             if not api_key:
                 return f"mock code for {task.description}"
             base_url = resolve_base_url()
-            client = anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=20) if base_url else anthropic.Anthropic(api_key=api_key, timeout=20)
             kwargs = dict(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=2048,
