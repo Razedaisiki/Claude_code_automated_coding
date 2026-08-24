@@ -2,13 +2,14 @@ from pathlib import Path
 from typing import Optional
 
 from agent_system.agents.parent import ParentAgent
+from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 from agent_system.context import AgentContext, load_context
 
 
 class ClaudeParentAgent(ParentAgent):
     def __init__(self, root: Path = None, model: str = None):
         self.root = root or Path.cwd()
-        self.model = model
+        self.model = model or resolve_model()
 
     def run(self, task: str) -> None:
         print("Starting Claude Parent")
@@ -59,11 +60,15 @@ class ClaudeParentAgent(ParentAgent):
         try:
             import anthropic
 
-            api_key = self._resolve_api_key()
+            api_key = resolve_api_key()
             if not api_key:
                 return self._fallback(task)
 
-            client = anthropic.Anthropic(api_key=api_key)
+            base_url = resolve_base_url()
+            if base_url:
+                client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
+            else:
+                client = anthropic.Anthropic(api_key=api_key)
             resp = client.messages.create(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=1024,
@@ -77,14 +82,9 @@ class ClaudeParentAgent(ParentAgent):
         except Exception as e:
             return self._fallback(task, error=str(e))
 
-    def _resolve_api_key(self) -> Optional[str]:
-        import os
-
-        return os.environ.get("ANTHROPIC_API_KEY")
-
     def _fallback(self, task: str, error: str = "") -> str:
         if error:
             print(f"  [fallback: {error[:80]}]")
         else:
-            print("  [fallback: no ANTHROPIC_API_KEY, using mock]")
+            print("  [fallback: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN, using mock]")
         return f"mock result for task: {task[:80]}"
