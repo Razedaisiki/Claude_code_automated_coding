@@ -11,7 +11,10 @@ def cmd_init(args):
 
 
 def cmd_run(args):
-    print("Run command executed")
+    from agent_system.supervisor.supervisor import Supervisor
+
+    sup = Supervisor()
+    sup.start()
 
 
 def cmd_resume(args):
