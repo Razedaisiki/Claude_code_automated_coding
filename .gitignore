@@ -1,0 +1,9 @@
+.commandcode/
+__pycache__/
+*.egg-info/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+*.egg-info
