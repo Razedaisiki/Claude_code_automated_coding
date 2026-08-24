@@ -1,21 +1,14 @@
 from pathlib import Path
 
+from agent_system.agents.mock_parent import MockParent
 from agent_system.supervisor.state import StateManager
 
 
-class _MockParent:
-    def run(self, task: str = ""):
-        print("Parent started")
-        if task:
-            print(f"Task: {task[:80]}")
-        print("Parent finished")
-
-
 class Supervisor:
-    def __init__(self, root: Path = None):
+    def __init__(self, root: Path = None, parent=None):
         self.root = root or Path.cwd()
         self.state = StateManager(self.root)
-        self.parent = _MockParent()
+        self.parent = parent or MockParent()
 
     def start(self):
         print("Supervisor started")
