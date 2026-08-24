@@ -18,7 +18,10 @@ def cmd_run(args):
 
 
 def cmd_resume(args):
-    print("Resume command executed")
+    from agent_system.supervisor.supervisor import Supervisor
+
+    sup = Supervisor()
+    sup.resume()
 
 
 def cmd_milestone(args):

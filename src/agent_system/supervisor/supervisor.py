@@ -33,5 +33,34 @@ class Supervisor:
         self.state.update(status="COMPLETED")
         print(f"State {self.state.load()['status']}")
 
+    def resume(self):
+        state = self.state.load()
+        sid = state.get("session_id")
+        if not sid:
+            print("No session to resume")
+            return
+        session = self.sessions.get(sid)
+        if not session:
+            print(f"Session {sid} not found")
+            return
+        print(f"Found session: {sid}")
+        print("Resume workflow")
+        self.state.update(status="RUNNING")
+        print(f"State {self.state.load()['status']} session {sid}")
+        task = session["task"]
+        try:
+            self.parent.run(task)
+        except KeyboardInterrupt:
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            raise
+        except Exception:
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            raise
+        self.state.update(status="COMPLETED")
+        print(f"State {self.state.load()['status']}")
+        print("DONE")
+
     def stop(self):
         self.state.update(status="COMPLETED")
