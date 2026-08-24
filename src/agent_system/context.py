@@ -1,44 +1,61 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import List
 
 
 @dataclass
-class AgentContext:
+class Milestone:
+    name: str
+    content: str
+
+
+@dataclass
+class ProjectContext:
     task: str
-    claude_md: str
-    milestone: str
+    instructions: str
+    milestones: List[Milestone]
     plan: str
-    repo_info: str
+    repository: str
+
+    @property
+    def claude_md(self) -> str:
+        return self.instructions
+
+    @property
+    def milestone(self) -> str:
+        return "\n\n".join(f"## {m.name}\n{m.content}" for m in self.milestones)
+
+    @property
+    def repo_info(self) -> str:
+        return self.repository
 
 
-def load_context(root: Path = None) -> AgentContext:
+def load_context(root: Path = None) -> ProjectContext:
     root = root or Path.cwd()
 
     def read(p: Path) -> str:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     task = read(root / "TASK.md")
-    claude_md = read(root / "CLAUDE.md")
+    instructions = read(root / "CLAUDE.md")
     plan = read(root / ".agent" / "plan.md")
 
+    milestones: List[Milestone] = []
     milestones_dir = root / ".agent" / "milestones"
-    milestone = ""
     if milestones_dir.exists():
-        parts = []
         for f in sorted(milestones_dir.iterdir()):
             if f.is_file():
-                parts.append(f"## {f.name}\n{read(f)}")
-        milestone = "\n\n".join(parts)
+                milestones.append(Milestone(name=f.name, content=read(f)))
 
-    repo_info = ""
+    repository = ""
     git_head = root / ".git" / "HEAD"
     if git_head.exists():
-        repo_info = read(git_head).strip()
+        repository = read(git_head).strip()
 
-    return AgentContext(
+    return ProjectContext(
         task=task,
-        claude_md=claude_md,
-        milestone=milestone,
+        instructions=instructions,
+        milestones=milestones,
         plan=plan,
-        repo_info=repo_info,
+        repository=repository,
     )

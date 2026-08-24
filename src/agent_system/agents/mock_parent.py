@@ -1,8 +1,9 @@
+from agent_system.agents.models import AgentResult
 from agent_system.agents.parent import ParentAgent
 
 
 class MockParent(ParentAgent):
-    def run(self, task: str) -> None:
+    def run(self, task: str) -> AgentResult:
         print("Parent Agent:")
         print("  reading task")
         if task:
@@ -11,3 +12,4 @@ class MockParent(ParentAgent):
                 print(f"  task: {preview}")
         print("  planning")
         print("  completed")
+        return AgentResult(status="SUCCESS", message="mock done", artifacts=[], next_action="EXECUTE")
