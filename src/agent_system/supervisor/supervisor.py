@@ -19,7 +19,16 @@ class Supervisor:
         print(f"State {self.state.load()['status']} session {session['id']}")
 
         task = session["task"]
-        self.parent.run(task)
+        try:
+            self.parent.run(task)
+        except KeyboardInterrupt:
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            raise
+        except Exception:
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            raise
 
         self.state.update(status="COMPLETED")
         print(f"State {self.state.load()['status']}")
