@@ -1,8 +1,18 @@
 from pathlib import Path
 
-from agent_system.agents.mock_parent import MockParent
 from agent_system.supervisor.session import SessionManager
 from agent_system.supervisor.state import StateManager
+
+
+def _default_parent(root: Path):
+    try:
+        from agent_system.agents.claude_parent import ClaudeParentAgent
+
+        return ClaudeParentAgent(root=root)
+    except Exception:
+        from agent_system.agents.mock_parent import MockParent
+
+        return MockParent()
 
 
 class Supervisor:
@@ -10,7 +20,7 @@ class Supervisor:
         self.root = root or Path.cwd()
         self.state = StateManager(self.root)
         self.sessions = SessionManager(self.root)
-        self.parent = parent or MockParent()
+        self.parent = parent or _default_parent(self.root)
 
     def start(self):
         print("Supervisor started")
