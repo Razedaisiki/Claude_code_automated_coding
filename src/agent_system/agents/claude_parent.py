@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 from agent_system.agents.parent import ParentAgent
+from agent_system.context import AgentContext, load_context
 
 
 class ClaudeParentAgent(ParentAgent):
@@ -11,14 +12,24 @@ class ClaudeParentAgent(ParentAgent):
 
     def run(self, task: str) -> None:
         print("Starting Claude Parent")
-        print("  TASK analyzed")
+        ctx = load_context(self.root)
+        print("  Loading context")
+        if ctx.task:
+            print("  TASK analyzed")
+        if ctx.claude_md:
+            print("  CLAUDE.md loaded")
+        if ctx.milestone:
+            print("  milestones loaded")
 
-        result = self._invoke(task)
+        result = self._invoke(ctx.task or task)
 
         if result:
             print(f"  result: {result[:120]}")
 
         print("Parent finished")
+
+    def get_context(self) -> AgentContext:
+        return load_context(self.root)
 
     def _invoke(self, task: str) -> str:
         try:
