@@ -4,7 +4,10 @@ from agent_system import __version__
 
 
 def cmd_init(args):
-    print("Init command executed")
+    from agent_system.init import init_workspace
+
+    agent_dir = init_workspace()
+    print(f"Initialized workspace at {agent_dir}")
 
 
 def cmd_run(args):
