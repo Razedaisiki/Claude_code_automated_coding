@@ -45,22 +45,30 @@ class ClaudeParentAgent(ParentAgent):
                 print(f"    {t.id} [{t.role}] {t.description}")
 
             from agent_system.agents.code_agent import CodeAgent
+            from agent_system.agents.models import AgentTask
             from agent_system.agents.subagent import MockTestAgent
 
             for t in tasks:
                 print(f"  Dispatch: {t.id} -> {t.role}")
-                diff_before = self.git.diff()
-                if t.role == "code":
-                    result = CodeAgent(root=self.root, model=self.model).execute(t)
-                else:
-                    result = MockTestAgent().execute(t)
+                for attempt in range(1, 4):
+                    diff_before = self.git.diff()
+                    if t.role == "code":
+                        if attempt > 1:
+                            t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files)
+                        result = CodeAgent(root=self.root, model=self.model).execute(t)
+                    else:
+                        result = MockTestAgent().execute(t)
 
-                diff_after = self.git.diff()
-                review = self._review(t, result, diff_before, diff_after)
-                if review.status == "FAILED":
-                    print(f"  Review FAILED for {t.id}: {review.message}")
-                    return review
-                print(f"  Review PASSED for {t.id}")
+                    diff_after = self.git.diff()
+                    review = self._review(t, result, diff_before, diff_after)
+                    if review.status == "SUCCESS":
+                        print(f"  Review PASSED for {t.id} (attempt {attempt})")
+                        break
+                    last_reason = review.message
+                    print(f"  Review FAILED for {t.id} (attempt {attempt}): {review.message}")
+                    if attempt == 3:
+                        return review
+                    print(f"  Retrying {t.id}...")
 
         else:
             self._execute(plan_text, ctx)
