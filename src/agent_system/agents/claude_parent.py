@@ -5,6 +5,7 @@ from agent_system.agents.parent import ParentAgent
 from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 from agent_system.context import ProjectContext, load_context
 from agent_system.plan_parser import parse_plan
+from agent_system.runtime.git import Git
 
 
 def _load_prompt(name: str) -> str:
@@ -18,6 +19,7 @@ class ClaudeParentAgent(ParentAgent):
     def __init__(self, root: Path = None, model: str = None):
         self.root = root or Path.cwd()
         self.model = model or resolve_model()
+        self.git = Git(self.root)
 
     def run(self, task: str) -> AgentResult:
         print("Starting Claude Parent")
@@ -47,16 +49,19 @@ class ClaudeParentAgent(ParentAgent):
 
             for t in tasks:
                 print(f"  Dispatch: {t.id} -> {t.role}")
+                diff_before = self.git.diff()
                 if t.role == "code":
                     result = CodeAgent(root=self.root, model=self.model).execute(t)
                 else:
                     result = MockTestAgent().execute(t)
 
-                review = self._review(t, result)
+                diff_after = self.git.diff()
+                review = self._review(t, result, diff_before, diff_after)
                 if review.status == "FAILED":
                     print(f"  Review FAILED for {t.id}: {review.message}")
                     return review
                 print(f"  Review PASSED for {t.id}")
+
         else:
             self._execute(plan_text, ctx)
 
@@ -71,11 +76,16 @@ class ClaudeParentAgent(ParentAgent):
     def get_context(self) -> ProjectContext:
         return load_context(self.root)
 
-    def _review(self, task, result: AgentResult) -> AgentResult:
+    def _review(self, task, result: AgentResult, diff_before: str = "", diff_after: str = "") -> AgentResult:
         if result.status == "FAILED":
             return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts)
         if not result.message:
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
+        diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
+        if task.role == "code" and not diff.strip() and not result.artifacts:
+            return AgentResult(status="FAILED", message=f"task {task.id} produced no file changes", artifacts=result.artifacts)
+        if diff.strip():
+            print(f"    diff: {diff[:200]}")
         return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts)
 
     def _plan(self, task: str, ctx: ProjectContext) -> str:
