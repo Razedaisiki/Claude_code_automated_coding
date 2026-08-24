@@ -84,9 +84,39 @@ class ClaudeParentAgent(ParentAgent):
         diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
         if task.role == "code" and not diff.strip() and not result.artifacts:
             return AgentResult(status="FAILED", message=f"task {task.id} produced no file changes", artifacts=result.artifacts)
+        ctx = load_context(self.root)
+        score = self._llm_review(task, result, diff, ctx)
+        if score is not None and not score.get("pass", True):
+            return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts)
         if diff.strip():
             print(f"    diff: {diff[:200]}")
         return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts)
+
+    def _llm_review(self, task, result: AgentResult, diff: str, ctx: ProjectContext):
+        try:
+            import anthropic, json
+
+            api_key = resolve_api_key()
+            if not api_key:
+                return None
+            base_url = resolve_base_url()
+            client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=15) if base_url else anthropic.Anthropic(api_key=api_key, timeout=15)
+            system = "You are a code reviewer. Judge if the diff satisfies the task and plan. Reply JSON only: {\"pass\": bool, \"reason\": string}"
+            user = f"Task: {task.description}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
+            resp = client.messages.create(
+                model=self.model or "claude-sonnet-4-20250514",
+                max_tokens=512,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(text[start:end])
+        except Exception:
+            return None
+        return None
 
     def _plan(self, task: str, ctx: ProjectContext) -> str:
         system = _load_prompt("parent")
