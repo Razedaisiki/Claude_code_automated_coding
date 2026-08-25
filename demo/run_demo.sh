@@ -44,6 +44,14 @@ echo "=== state ==="
 cat .agent/state.json 2>&1 | head -10
 
 echo ""
+echo "=== MILESTONE ==="
+xxx milestone 2>&1 | head -20 || true
+if [ -f .agent/milestones/001.md ]; then
+  echo "--- .agent/milestones/001.md ---"
+  cat .agent/milestones/001.md 2>&1 | head -40
+fi
+
+echo ""
 echo "=== DONE ==="
 echo "Demo workspace: $SCRIPT_DIR"
 echo "To clean: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git"
