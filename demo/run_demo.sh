@@ -4,7 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== INIT ==="
-rm -rf .agent src .git 2>/dev/null || true
+rm -rf .agent src 2>/dev/null || true
 xxx init
 if [ ! -d .git ]; then
   git init -q

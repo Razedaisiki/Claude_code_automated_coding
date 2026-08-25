@@ -8,5 +8,5 @@ dist/
 build/
 *.egg-info
 demo/.agent/
-demo/src/
-!demo/TASK.md
+demo/.git/
+demo/src/__pycache__/
