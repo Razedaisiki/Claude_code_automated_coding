@@ -50,6 +50,7 @@ class ClaudeParentAgent(ParentAgent):
 
             for t in tasks:
                 print(f"  Dispatch: {t.id} -> {t.role}")
+                last_diff = ""
                 for attempt in range(1, 4):
                     diff_before = self.git.diff("-- src")
                     if t.role == "code":
@@ -64,6 +65,11 @@ class ClaudeParentAgent(ParentAgent):
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
                         break
+                    cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
+                    if cur_diff.strip() == last_diff.strip() and attempt > 1:
+                        print(f"  No new changes (same diff), stopping retry for {t.id}")
+                        return review
+                    last_diff = cur_diff
                     last_reason = review.message
                     print(f"  Review FAILED for {t.id} (attempt {attempt}): {review.message}")
                     if attempt == 3:
