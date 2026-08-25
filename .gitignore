@@ -8,5 +8,5 @@ dist/
 build/
 *.egg-info
 demo/.agent/
-demo/TASK.md
 demo/src/
+!demo/TASK.md

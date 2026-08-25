@@ -113,9 +113,13 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (optional)", artifacts=result.artifacts)
         if task.role != "code":
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
-        diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-        if not diff.strip() and not result.artifacts:
+        raw_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
+        filtered = "\n".join(l for l in raw_diff.splitlines() if "__pycache__" not in l and ".pyc" not in l)
+        diff = filtered.strip()
+        if not diff and not result.artifacts:
             return AgentResult(status="FAILED", message=f"task {task.id} produced no file changes", artifacts=result.artifacts)
+        if not diff and result.artifacts:
+            diff = "\n".join(result.artifacts)
         ctx = load_context(self.root)
         score = self._llm_review(task, result, diff, ctx)
         if score is not None and not score.get("pass", True):

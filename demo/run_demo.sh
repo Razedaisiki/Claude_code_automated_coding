@@ -4,7 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== INIT ==="
-rm -rf .agent TASK.md src 2>/dev/null || true
+rm -rf .agent src .git 2>/dev/null || true
 xxx init
 if [ ! -d .git ]; then
   git init -q
@@ -17,10 +17,6 @@ fi
 
 echo ""
 echo "=== TASK ==="
-cat > TASK.md <<'EOF'
-# Task
-Add hello() function returning "hello" to src/demo_app.py
-EOF
 cat TASK.md
 
 echo ""
@@ -50,4 +46,4 @@ cat .agent/state.json 2>&1 | head -10
 echo ""
 echo "=== DONE ==="
 echo "Demo workspace: $SCRIPT_DIR"
-echo "To clean: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/TASK.md $SCRIPT_DIR/src $SCRIPT_DIR/.git 2>/dev/null; rm -rf $SCRIPT_DIR/.git 2>/dev/null || true"
+echo "To clean: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git"
