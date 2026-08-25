@@ -30,7 +30,12 @@ class Supervisor:
 
         task = session["task"]
         try:
-            self.parent.run(task)
+            result = self.parent.run(task)
+            if hasattr(result, "status") and result.status == "FAILED":
+                self.state.update(status="FAILED")
+                print(f"State {self.state.load()['status']}")
+                print(f"Parent failed: {result.message}")
+                return result
         except KeyboardInterrupt:
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")
@@ -42,6 +47,7 @@ class Supervisor:
 
         self.state.update(status="COMPLETED")
         print(f"State {self.state.load()['status']}")
+        return result if "result" in locals() else None
 
     def resume(self):
         state = self.state.load()
@@ -59,7 +65,11 @@ class Supervisor:
         print(f"State {self.state.load()['status']} session {sid}")
         task = session["task"]
         try:
-            self.parent.run(task)
+            result = self.parent.run(task)
+            if hasattr(result, "status") and result.status == "FAILED":
+                self.state.update(status="FAILED")
+                print(f"State {self.state.load()['status']}")
+                return result
         except KeyboardInterrupt:
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")

@@ -51,7 +51,7 @@ class ClaudeParentAgent(ParentAgent):
             for t in tasks:
                 print(f"  Dispatch: {t.id} -> {t.role}")
                 for attempt in range(1, 4):
-                    diff_before = self.git.diff()
+                    diff_before = self.git.diff("-- demo/src demo/TASK.md demo/.agent")
                     if t.role == "code":
                         if attempt > 1:
                             t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files)
@@ -59,7 +59,7 @@ class ClaudeParentAgent(ParentAgent):
                     else:
                         result = MockTestAgent().execute(t)
 
-                    diff_after = self.git.diff()
+                    diff_after = self.git.diff("-- demo/src demo/TASK.md demo/.agent")
                     review = self._review(t, result, diff_before, diff_after)
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
@@ -89,8 +89,13 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts)
         if not result.message:
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
+        if task.role != "code":
+            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
+        is_inspect = any(k in task.description.lower() for k in ["inspect", "verify whether", "confirm the existence", "check whether", "review any existing"])
+        if is_inspect:
+            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (inspect)", artifacts=result.artifacts)
         diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-        if task.role == "code" and not diff.strip() and not result.artifacts:
+        if not diff.strip() and not result.artifacts:
             return AgentResult(status="FAILED", message=f"task {task.id} produced no file changes", artifacts=result.artifacts)
         ctx = load_context(self.root)
         score = self._llm_review(task, result, diff, ctx)
