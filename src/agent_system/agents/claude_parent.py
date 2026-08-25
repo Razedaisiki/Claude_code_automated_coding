@@ -9,9 +9,21 @@ from agent_system.runtime.git import Git
 
 
 def _load_prompt(name: str) -> str:
-    bundled = Path(__file__).parent.parent / "prompts" / f"{name}.md"
-    if bundled.exists():
-        return bundled.read_text(encoding="utf-8")
+    base = Path(__file__).parent.parent / "prompts"
+    candidates = [
+        base / f"{name}.md",
+        base / name / "system.md",
+        base / name / "planning.md",
+    ]
+    parts = []
+    for p in candidates:
+        if p.exists():
+            parts.append(p.read_text(encoding="utf-8"))
+    if parts:
+        common = base / "common" / "engineering_rules.md"
+        if common.exists():
+            parts.append(common.read_text(encoding="utf-8"))
+        return "\n\n".join(parts)
     return ""
 
 

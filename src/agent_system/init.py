@@ -12,22 +12,21 @@ def init_workspace(root: Path = None):
     prompts_dir.mkdir(parents=True, exist_ok=True)
     milestones_dir.mkdir(parents=True, exist_ok=True)
 
-    state = {"status": "INITIALIZED", "session_id": None}
+    state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.2"}
     (agent_dir / "state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
     (agent_dir / "config.yaml").write_text(
-        "version: 0.1.0\nmodel: mock\n", encoding="utf-8"
+        "version: 0.1.0\nmodel: mock\nprompt_version: v0.2\n", encoding="utf-8"
     )
 
     src_prompts = Path(__file__).parent / "prompts"
     if src_prompts.exists():
-        for p in src_prompts.iterdir():
-            if p.is_file():
-                shutil.copy(p, prompts_dir / p.name)
-    else:
-        (prompts_dir / "parent.md").write_text("# Parent Agent Prompt\n\nYou are the parent agent.\n", encoding="utf-8")
-        (prompts_dir / "code.md").write_text("# Code Agent Prompt\n\nYou are the code agent.\n", encoding="utf-8")
-        (prompts_dir / "test.md").write_text("# Test Agent Prompt\n\nYou are the test agent.\n", encoding="utf-8")
+        for item in src_prompts.rglob("*"):
+            if item.is_file():
+                rel = item.relative_to(src_prompts)
+                dest = prompts_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(item, dest)
 
     task_file = root / "TASK.md"
     if not task_file.exists():

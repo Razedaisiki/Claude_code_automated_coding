@@ -33,7 +33,14 @@ class ClaudeCodeRuntime(CodingRuntime):
             base_url = resolve_base_url()
             client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=40) if base_url else anthropic.Anthropic(api_key=api_key, timeout=40)
             model = self.model or resolve_model() or "claude-sonnet-4-20250514"
-            prompt = (Path(__file__).parent.parent / "prompts" / "code.md").read_text(encoding="utf-8") if (Path(__file__).parent.parent / "prompts" / "code.md").exists() else ""
+            base = Path(__file__).parent.parent / "prompts"
+            parts = []
+            for p in [base / "code.md", base / "code" / "system.md", base / "code" / "execution.md"]:
+                if p.exists():
+                    parts.append(p.read_text(encoding="utf-8"))
+            if parts and (base / "common" / "engineering_rules.md").exists():
+                parts.append((base / "common" / "engineering_rules.md").read_text(encoding="utf-8"))
+            prompt = "\n\n".join(parts)
             user = f"Task: {task.description}\nWorkspace: {self.root}\nFiles hint: {', '.join(task.files) if task.files else 'auto-detect'}\nUse tools to inspect and modify files as needed."
 
             before = set(self.git.changed_files())
