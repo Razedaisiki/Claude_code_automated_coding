@@ -16,15 +16,16 @@ One paragraph: what the task aims to achieve.
 Understanding of current codebase and task.
 
 # Tasks
-Numbered list of actionable tasks.
+Numbered list of implementation tasks only. Each task must require a file change.
+Do NOT create tasks for: verification, syntax checks, docstring tweaks, optional style improvements, or testing — those belong in Acceptance/Validation.
 
-# Execution Order
-Ordered steps for implementation.
+# Acceptance
+Bullet list of acceptance criteria (what must be true after Tasks complete). Use this for verification, docstring, and validation expectations.
 
 # Validation
-How to verify completion.
+How to verify completion (commands or checks).
 
 Constraints:
 - Be specific and grounded in the actual task and repo context. No generic filler.
+- Keep Tasks minimal: 1-3 implementation tasks only. Do not invent extra steps.
 - Do not make assumptions beyond the given context.
-- Keep the plan actionable and reviewable.
