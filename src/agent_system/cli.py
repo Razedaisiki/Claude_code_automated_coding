@@ -25,7 +25,27 @@ def cmd_resume(args):
 
 
 def cmd_milestone(args):
-    print("Milestone command executed")
+    from pathlib import Path
+
+    from agent_system.supervisor.state import StateManager
+
+    root = Path.cwd()
+    if hasattr(args, "path") and args.path:
+        root = Path(args.path)
+    state = StateManager(root).load()
+    if state.get("status") != "COMPLETED":
+        print(f"Cannot create milestone. Current state: {state.get('status', 'UNKNOWN')}")
+        return
+    feedback = getattr(args, "feedback", None)
+    print("Generating milestone...")
+    from agent_system.agents.claude_parent import ClaudeParentAgent
+
+    parent = ClaudeParentAgent(root=root)
+    result = parent.create_milestone(feedback=feedback) if hasattr(parent, "create_milestone") else None
+    if result:
+        print(f"Milestone created: {result}")
+    else:
+        print("Milestone generation not yet implemented")
 
 
 def main():
@@ -43,7 +63,9 @@ def main():
     p_resume = sub.add_parser("resume", help="resume workflow")
     p_resume.set_defaults(func=cmd_resume)
 
-    p_milestone = sub.add_parser("milestone", help="manage milestones")
+    p_milestone = sub.add_parser("milestone", help="create milestone from completed workflow")
+    p_milestone.add_argument("--feedback", type=str, default=None, help="human feedback for milestone")
+    p_milestone.add_argument("--path", type=str, default=None, help="workspace path")
     p_milestone.set_defaults(func=cmd_milestone)
 
     args = parser.parse_args()
