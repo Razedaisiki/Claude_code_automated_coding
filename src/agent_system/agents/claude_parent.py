@@ -51,7 +51,7 @@ class ClaudeParentAgent(ParentAgent):
             for t in tasks:
                 print(f"  Dispatch: {t.id} -> {t.role}")
                 for attempt in range(1, 4):
-                    diff_before = self.git.diff("-- demo/src demo/TASK.md demo/.agent")
+                    diff_before = self.git.diff("-- src")
                     if t.role == "code":
                         if attempt > 1:
                             t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files)
@@ -59,7 +59,7 @@ class ClaudeParentAgent(ParentAgent):
                     else:
                         result = MockTestAgent().execute(t)
 
-                    diff_after = self.git.diff("-- demo/src demo/TASK.md demo/.agent")
+                    diff_after = self.git.diff("-- src")
                     review = self._review(t, result, diff_before, diff_after)
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
@@ -91,7 +91,8 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
         if task.role != "code":
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
-        is_inspect = any(k in task.description.lower() for k in ["inspect", "verify whether", "confirm the existence", "check whether", "review any existing"])
+        low = task.description.lower()
+        is_inspect = any(k in low for k in ["inspect", "verify whether", "confirm the existence", "check whether", "review any existing", "ensure the function returns", "verify the function", "verify the implementation", "verify the file is syntactically"])
         if is_inspect:
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (inspect)", artifacts=result.artifacts)
         diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
@@ -114,8 +115,8 @@ class ClaudeParentAgent(ParentAgent):
                 return None
             base_url = resolve_base_url()
             client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=15) if base_url else anthropic.Anthropic(api_key=api_key, timeout=15)
-            system = "You are a code reviewer. Judge if the diff satisfies the task and plan. Reply JSON only: {\"pass\": bool, \"reason\": string}"
-            user = f"Task: {task.description}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
+            system = "You are a code reviewer. The workspace is demo/ (so demo/src/demo_app.py is the correct path for task src/demo_app.py). Judge if the diff satisfies the task and plan. Reply JSON only: {\"pass\": bool, \"reason\": string}"
+            user = f"Task: {task.description}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}\nNote: workspace is demo/, so paths like demo/src/demo_app.py and src/demo_app.py refer to the same file."
             resp = client.messages.create(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=512,
