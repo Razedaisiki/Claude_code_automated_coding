@@ -102,6 +102,43 @@ class ClaudeParentAgent(ParentAgent):
     def get_context(self) -> ProjectContext:
         return load_context(self.root)
 
+    def create_milestone(self, feedback: str = None) -> str:
+        from datetime import datetime, timezone
+
+        from agent_system.milestone.context import collect_context
+
+        ctx = collect_context(self.root, feedback=feedback)
+        p = Path(__file__).parent.parent / "prompts" / "parent" / "historian.md"
+        system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/historian") or "You are the Engineering Historian. Create a milestone document."
+        prev_text = "\n\n---\n\n".join(ctx.previous_milestones[-2:]) if ctx.previous_milestones else "(none)"
+        user = (
+            f"Task:\n{ctx.task[:4000]}\n\n"
+            f"Plan:\n{ctx.plan[:4000]}\n\n"
+            f"Diff:\n{ctx.diff[:6000]}\n\n"
+            f"Git log:\n{ctx.git_log[:2000]}\n\n"
+            f"Repo state:\n{ctx.repo_state[:2000]}\n\n"
+            f"Previous milestones (last 2):\n{prev_text[:4000]}\n\n"
+            f"Human feedback:\n{ctx.human_feedback or '(none)'}"
+        )
+        content = self._invoke(system, user)
+        if content.startswith("mock result"):
+            content = (
+                f"# Milestone {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
+                f"## Objective\n{ctx.task[:200] or 'Completed task'}\n\n"
+                f"## Implementation Summary\n{content}\n\n"
+                f"## Architecture Decisions\nSee plan and diff.\n\n"
+                f"## Challenges\nNone noted.\n\n"
+                f"## Future Considerations\nContinue iteration.\n"
+            )
+        milestones_dir = self.root / ".agent" / "milestones"
+        milestones_dir.mkdir(parents=True, exist_ok=True)
+        existing = sorted(milestones_dir.glob("*.md"))
+        next_id = len(existing) + 1
+        fname = f"{next_id:03d}.md"
+        out = milestones_dir / fname
+        out.write_text(content if content.lstrip().startswith("#") else f"# Milestone {next_id:03d}\n\n{content}", encoding="utf-8")
+        return str(out)
+
     def _review(self, task, result: AgentResult, diff_before: str = "", diff_after: str = "") -> AgentResult:
         if result.status == "FAILED":
             return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts)
