@@ -89,12 +89,12 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts)
         if not result.message:
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
+        if task.type == "verification":
+            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (verification)", artifacts=result.artifacts)
+        if task.type == "optional":
+            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (optional)", artifacts=result.artifacts)
         if task.role != "code":
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
-        low = task.description.lower()
-        is_inspect = any(k in low for k in ["inspect", "verify whether", "confirm the existence", "check whether", "review any existing", "ensure the function returns", "verify the function", "verify the implementation", "verify the file is syntactically"])
-        if is_inspect:
-            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (inspect)", artifacts=result.artifacts)
         diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
         if not diff.strip() and not result.artifacts:
             return AgentResult(status="FAILED", message=f"task {task.id} produced no file changes", artifacts=result.artifacts)
