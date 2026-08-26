@@ -25,7 +25,31 @@ class Git:
                 for l in to_add:
                     f.write(l + "\n")
 
+    def ensure_runtime_isolation(self):
+        self.ensure_runtime_excludes()
+        r = self.shell.run("git ls-files .agent 2>&1")
+        if r.stdout.strip():
+            print("Agent runtime files were tracked by Git. Removing .agent from the repository index.")
+            self.shell.run("git rm -r --cached --ignore-unmatch .agent 2>&1")
+            r2 = self.shell.run("git ls-files .agent 2>&1")
+            if r2.stdout.strip():
+                print(f"  Warning: still tracked: {r2.stdout.strip()[:80]}")
+
+    def _check_workspace_repo(self) -> bool:
+        r = self.shell.run("git rev-parse --show-toplevel 2>&1")
+        if r.returncode != 0:
+            return False
+        found = Path(r.stdout.strip()).resolve()
+        return found == self.root
+
+    def _guard(self) -> bool:
+        if not self._check_workspace_repo():
+            return False
+        return True
+
     def diff(self, args: str = "") -> str:
+        if not self._guard():
+            return ""
         base = f"git diff {args}".strip() if args else "git diff"
         r = self.shell.run(base)
         out = r.stdout
@@ -47,6 +71,8 @@ class Git:
         return out or r.stdout
 
     def diff_stat(self, args: str = "") -> str:
+        if not self._guard():
+            return ""
         base = f"git diff --stat {args}".strip() if args else "git diff --stat"
         r = self.shell.run(base)
         out = r.stdout
@@ -57,19 +83,44 @@ class Git:
         return out
 
     def status(self) -> str:
+        if not self._guard():
+            return ""
         r = self.shell.run("git status --porcelain -uall")
         return r.stdout
+
+    def project_diff(self) -> str:
+        raw = self.diff()
+        if not raw:
+            return ""
+        lines = []
+        skip = False
+        for l in raw.splitlines():
+            if l.startswith("diff --git") and ".agent/" in l:
+                skip = True
+                continue
+            if l.startswith("diff --git"):
+                skip = False
+            if skip:
+                continue
+            if ".agent/" in l or "__pycache__" in l or ".pyc" in l:
+                continue
+            lines.append(l)
+        return "\n".join(lines)
 
     def commit(self, message: str) -> str:
         if not message or not message.strip():
             return "empty message"
-        self.ensure_runtime_excludes()
+        if not self._guard():
+            return "not a git repository"
+        self.ensure_runtime_isolation()
         self.shell.run("git add -A")
         r = self.shell.run(f"git commit -m {self._quote(message)}")
         return r.stdout + r.stderr
 
     def commit_diff(self, sha: str) -> str:
         if not sha:
+            return ""
+        if not self._guard():
             return ""
         r = self.shell.run(f"git show --format= --find-renames {sha} 2>&1")
         if r.stdout.strip():
@@ -78,14 +129,20 @@ class Git:
         return r2.stdout
 
     def has_commits(self) -> bool:
+        if not self._guard():
+            return False
         r = self.shell.run("git rev-parse HEAD 2>&1")
         return r.returncode == 0
 
     def has_remote(self) -> bool:
+        if not self._guard():
+            return False
         r = self.shell.run("git remote 2>&1")
         return bool(r.stdout.strip())
 
     def remote_url(self) -> str:
+        if not self._guard():
+            return ""
         r = self.shell.run("git remote get-url origin 2>&1")
         return r.stdout.strip() if r.returncode == 0 else ""
 
@@ -96,12 +153,6 @@ class Git:
         out = r.stdout + r.stderr
         if r.returncode == 0:
             return {"status": "SUCCESS", "message": out.strip()}
-        if "has no upstream branch" in out or "set upstream" in out.lower():
-            r2 = self.shell.run("git push -u origin HEAD 2>&1")
-            out2 = r2.stdout + r2.stderr
-            if r2.returncode == 0:
-                return {"status": "SUCCESS", "message": out2.strip()}
-            return {"status": "REMOTE_FAILED", "message": (out + "\n" + out2).strip()}
         return {"status": "REMOTE_FAILED", "message": out.strip()}
 
     def _quote(self, s: str) -> str:
