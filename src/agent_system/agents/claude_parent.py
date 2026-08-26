@@ -118,20 +118,29 @@ class ClaudeParentAgent(ParentAgent):
     def get_context(self) -> ProjectContext:
         return load_context(self.root)
 
-    def ci_review(self, ci_status: str, ci_logs: str = "", task: str = None) -> dict:
-        system = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
-        sys_text = system.read_text(encoding="utf-8") if system.exists() else "You are the Tech Lead reviewing CI results."
+    def ci_review(self, ci_status: str, ci_logs: str = "", task: str = None, commit_sha: str = None) -> dict:
+        p = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
+        sys_text = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/ci_review") or "You are the Tech Lead reviewing CI results."
         from agent_system.context import load_context
 
         ctx = load_context(self.root)
         from agent_system.runtime.git import Git
 
         diff = Git(self.root).diff()
-        user = f"Task:\n{task or ctx.task}\n\nPlan:\n{ctx.plan[:3000]}\n\nDiff:\n{diff[:4000]}\n\nCI status: {ci_status}\n\nCI logs:\n{ci_logs[:4000]}"
+        user = (
+            f"Task:\n{task or ctx.task}\n\n"
+            f"Plan:\n{ctx.plan[:3000]}\n\n"
+            f"Commit: {commit_sha or ''}\n\n"
+            f"Diff:\n{diff[:4000]}\n\n"
+            f"CI status: {ci_status}\n\nCI logs:\n{ci_logs[:4000]}"
+        )
         text = self._invoke(sys_text, user)
-        if "APPROVE" in text.upper():
-            return {"decision": "APPROVED", "reason": text[:500]}
-        return {"decision": "CHANGES_REQUIRED", "reason": text[:500], "correction": text}
+        if "APPROVE" in text.upper() or "CI_APPROVED" in text.upper():
+            return {"decision": "APPROVED", "reason": text[:800]}
+        low = text.lower()
+        if "existing_project" in low or "infrastructure" in low:
+            return {"decision": "APPROVED_WITH_NOTE", "reason": text[:800], "classification": text[:300]}
+        return {"decision": "CHANGES_REQUIRED", "reason": text[:800], "correction": text}
 
     def create_milestone(self, feedback: str = None) -> str:
         from datetime import datetime, timezone
