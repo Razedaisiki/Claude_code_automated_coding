@@ -38,5 +38,4 @@ cat .agent/state.json 2>&1 | head -20
 echo ""
 echo "=== DONE (gh) ==="
 echo "If push failed, effective mode falls back to local (config stays gh)"
-echo "To clean: xxx remote local; rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git"
-echo "To connect GitHub: git remote add origin <url> && gh auth status"
+echo "Shared remote: clean before next demo with: rm <file> && git add -A && git commit -m 'chore: clean' && git push"

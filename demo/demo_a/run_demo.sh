@@ -47,4 +47,7 @@ git log --oneline -3 2>&1 | head -5
 
 echo ""
 echo "=== DONE (demo_a) ==="
-echo "To clean: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git"
+echo "Shared remote: test_demo.git — clean up before next demo:"
+echo "  rm src/greeting.py  # or the file created by this demo"
+echo "  git add -A && git commit -m 'chore: clean demo_a artifacts' && git push"
+echo "Or: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git (local clean only)"

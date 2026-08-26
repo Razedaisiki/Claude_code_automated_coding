@@ -37,3 +37,6 @@ cat .agent/state.json 2>&1 | head -20
 
 echo ""
 echo "=== DONE (demo_d) ==="
+echo "Shared remote: test_demo.git — clean up before next demo:"
+echo "  rm -rf src/  # remove User-related files created by this demo"
+echo "  git add -A && git commit -m 'chore: clean demo_d artifacts' && git push"

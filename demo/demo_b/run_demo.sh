@@ -38,4 +38,7 @@ cat .agent/state.json 2>&1 | head -20
 
 echo ""
 echo "=== DONE (demo_b) ==="
+echo "Shared remote: test_demo.git — clean up before next demo:"
+echo "  rm src/user_utils.py  # or the file created by this demo"
+echo "  git add -A && git commit -m 'chore: clean demo_b artifacts' && git push"
 echo "To test resume: kill during WAITING_CI, then run: xxx resume"
