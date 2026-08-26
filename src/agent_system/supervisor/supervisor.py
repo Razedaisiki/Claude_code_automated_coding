@@ -28,8 +28,9 @@ class Supervisor:
 
         Git(self.root).ensure_runtime_excludes()
         git = Git(self.root)
-        status = git.status()
-        if status.strip():
+        raw_status = git.status()
+        filtered = "\n".join(l for l in raw_status.splitlines() if ".agent/" not in l and "__pycache__" not in l)
+        if filtered.strip():
             print("Workspace has existing changes.")
             print("Preparing pre-workflow snapshot...")
             diff = git.diff()
