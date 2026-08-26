@@ -131,10 +131,11 @@ class ClaudeParentAgent(ParentAgent):
                                 elif push_res["status"] in ("REMOTE_FAILED", "NO_REMOTE"):
                                     label = "Push failed (fallback to local)" if push_res["status"] == "REMOTE_FAILED" else "No remote, skipping CI"
                                     print(f"  {label}: {push_res['message'][:80]}")
-                                    continue
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "configured_mode": "gh", "push_status": push_res["status"], "task_id": t.id, "task_index": task_index, "commit_sha": sha})
+                                    break
                                 else:
                                     print(f"  Push skipped: {push_res['message'][:80]}")
-                                    continue
+                                    break
                                 StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index})
                                 print(f"  WAITING_CI for {sha[:7]}")
                                 ci_res = delivery.wait_ci(sha)
