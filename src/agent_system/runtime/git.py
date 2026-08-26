@@ -96,6 +96,12 @@ class Git:
         out = r.stdout + r.stderr
         if r.returncode == 0:
             return {"status": "SUCCESS", "message": out.strip()}
+        if "has no upstream branch" in out or "set upstream" in out.lower():
+            r2 = self.shell.run("git push -u origin HEAD 2>&1")
+            out2 = r2.stdout + r2.stderr
+            if r2.returncode == 0:
+                return {"status": "SUCCESS", "message": out2.strip()}
+            return {"status": "REMOTE_FAILED", "message": (out + "\n" + out2).strip()}
         return {"status": "REMOTE_FAILED", "message": out.strip()}
 
     def _quote(self, s: str) -> str:

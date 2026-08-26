@@ -98,6 +98,7 @@ class ClaudeParentAgent(ParentAgent):
             for task_index, t in enumerate(tasks, start=start_idx):
                 print(f"  Dispatch: {t.id} -> {t.role}")
                 last_diff = ""
+                last_reason = ""
                 for attempt in range(1, 4):
                     diff_before = self.git.diff()
                     if t.role == "code":
