@@ -23,3 +23,4 @@ class AgentResult:
     message: str = ""
     artifacts: List[str] = field(default_factory=list)
     next_action: str = ""
+    commit_message: str = ""

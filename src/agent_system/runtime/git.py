@@ -44,6 +44,20 @@ class Git:
         r = self.shell.run("git status --porcelain")
         return r.stdout
 
+    def commit(self, message: str) -> str:
+        if not message or not message.strip():
+            return "empty message"
+        self.shell.run("git add -A")
+        r = self.shell.run(f"git commit -m {self._quote(message)}")
+        return r.stdout + r.stderr
+
+    def has_commits(self) -> bool:
+        r = self.shell.run("git rev-parse HEAD 2>&1")
+        return r.returncode == 0
+
+    def _quote(self, s: str) -> str:
+        return "'" + s.replace("'", "'\"'\"'") + "'"
+
     def changed_files(self) -> list:
         out = self.status()
         files = []

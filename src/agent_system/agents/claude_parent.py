@@ -76,6 +76,12 @@ class ClaudeParentAgent(ParentAgent):
                     review = self._review(t, result, diff_before, diff_after)
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
+                        if t.type == "implementation" and review.commit_message:
+                            msg = review.commit_message
+                            out = self.git.commit(msg)
+                            print(f"  Committed: {msg}")
+                            if out.strip():
+                                print(f"    {out.strip()[:120]}")
                         break
                     cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
                     if cur_diff.strip() == last_diff.strip() and attempt > 1:
@@ -163,7 +169,15 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts)
         if diff.strip():
             print(f"    diff: {diff[:200]}")
-        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts)
+        cm = self._commit_message(task, diff)
+        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm)
+
+    def _commit_message(self, task, diff: str) -> str:
+        prefix = "feat" if task.type == "implementation" else "chore"
+        desc = task.description.strip().rstrip(".")
+        if len(desc) > 72:
+            desc = desc[:69] + "..."
+        return f"{prefix}: {desc} [{task.id}]"
 
     def _llm_review(self, task, result: AgentResult, diff: str, ctx: ProjectContext):
         try:
