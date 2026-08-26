@@ -23,9 +23,9 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
     tasks: List[AgentTask] = []
     idx = 0
 
-    id_re = re.compile(r"^ID:\s*(.+)", re.IGNORECASE)
-    type_re = re.compile(r"^Type:\s*(.+)", re.IGNORECASE)
-    desc_re = re.compile(r"^Description:\s*(.+)", re.IGNORECASE)
+    id_re = re.compile(r"^(?:-\s*\*\*)?ID:\*?\*?\s*(.+)", re.IGNORECASE)
+    type_re = re.compile(r"^(?:-\s*\*\*)?Type:\*?\*?\s*(.+)", re.IGNORECASE)
+    desc_re = re.compile(r"^(?:-\s*\*\*)?Description:\*?\*?\s*(.+)", re.IGNORECASE)
 
     lines = plan_text.splitlines()
     i = 0
@@ -82,22 +82,18 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
             i += 1
             continue
 
-        m = re.match(r"^\d+[\.\)]\s*(.+)", stripped)
-        if m:
-            desc = m.group(1).strip()
-            role = "test" if re.search(r"\btest\b", desc, re.IGNORECASE) else "code"
-            ttype, required = classify(desc)
-            tasks.append(AgentTask(id=f"task{idx+1:03d}", role=role, description=desc, type=ttype, required=required))
-            idx += 1
-            i += 1
-            continue
-        if stripped.startswith("- "):
-            desc = stripped[2:].strip()
-            if desc:
-                role = "test" if re.search(r"\btest\b", desc, re.IGNORECASE) else "code"
-                ttype, required = classify(desc)
-                tasks.append(AgentTask(id=f"task{idx+1:03d}", role=role, description=desc, type=ttype, required=required))
-                idx += 1
+        if in_tasks and not id_re.match(stripped) and not type_re.match(stripped) and not desc_re.match(stripped):
+            if re.match(r"^- \*\*(Acceptance|Validation)", stripped):
+                i += 1
+                while i < len(lines):
+                    nxt = lines[i].strip()
+                    if re.match(r"^(?:-\s*\*\*)?(ID|Type|Description):", nxt, re.IGNORECASE) or re.match(r"^#{1,2}\s+", nxt):
+                        break
+                    i += 1
+                continue
+            if re.match(r"^## Task \d+", stripped):
+                i += 1
+                continue
         i += 1
 
     if not tasks:
@@ -106,6 +102,8 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
             m = re.match(r"^\d+[\.\)]\s*(.+)", stripped)
             if m:
                 desc = m.group(1).strip()
+                if re.match(r"^(Acceptance|Validation|Risks|Objective|Analysis)", desc):
+                    continue
                 role = "test" if re.search(r"\btest\b", desc, re.IGNORECASE) else "code"
                 ttype, required = classify(desc)
                 tasks.append(AgentTask(id=f"task{idx+1:03d}", role=role, description=desc, type=ttype, required=required))
