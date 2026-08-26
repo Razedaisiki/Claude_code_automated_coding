@@ -316,8 +316,9 @@ class ClaudeParentAgent(ParentAgent):
                 return None
             base_url = resolve_base_url()
             client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=15) if base_url else anthropic.Anthropic(api_key=api_key, timeout=15)
-            system = "You are a code reviewer. The workspace is demo/ (so demo/src/demo_app.py is the correct path for task src/demo_app.py). Judge if the diff satisfies the task and plan. Reply JSON only: {\"pass\": bool, \"reason\": string}"
-            user = f"Task: {task.description}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}\nNote: workspace is demo/, so paths like demo/src/demo_app.py and src/demo_app.py refer to the same file."
+            p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+            system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer. Reply JSON only: {\"pass\": bool, \"reason\": string}"
+            user = f"Task: {task.description}\nAcceptance: {task.acceptance}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
             resp = client.messages.create(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=512,
