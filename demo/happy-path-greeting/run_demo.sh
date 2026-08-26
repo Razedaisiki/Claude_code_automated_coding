@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -20,14 +20,17 @@ fi
 if ! git remote 2>&1 | grep -q origin; then
   git remote add origin git@github.com:Razedaisiki/test_demo.git 2>&1 || true
 fi
-BRANCH="happy-path-greeting"
+BRANCH="demo/happy-path-greeting-$(date +%Y%m%d-%H%M%S)"
 git fetch origin 2>&1 | head -5 || true
-git checkout -B "$BRANCH" 2>&1 | head -5 || true
-if ! git push -u origin "$BRANCH" 2>&1 | head -10; then
-  echo "ERROR: Failed to push branch $BRANCH"
+git switch -c "$BRANCH" origin/main 2>&1 | head -5 || true
+echo "Creating demo branch: $BRANCH"
+if ! PUSH_OUTPUT=$(git push -u origin "$BRANCH" 2>&1); then
+  echo "$PUSH_OUTPUT"
+  echo "ERROR: failed to establish demo branch upstream"
   exit 1
 fi
-echo "Branch: $BRANCH @ test_demo.git"
+echo "$PUSH_OUTPUT"
+echo "Branch ready: $BRANCH"
 
 # 2. Now init agent workspace (after Git is ready)
 rm -rf .agent src 2>/dev/null || true
