@@ -9,15 +9,13 @@ echo "External operation: xxx run → WAITING_CI → Ctrl+C → xxx resume"
 
 echo ""
 echo "=== INIT ==="
-rm -rf .agent src 2>/dev/null || true
-xxx init
-xxx remote gh 2>&1 | head -5 || true
 if [ ! -d .git ]; then
   git init -q
   git config user.email "demo@test.com" 2>/dev/null || true
   git config user.name "demo" 2>/dev/null || true
   git add . 2>/dev/null || true
   git commit -qm "initial demo" 2>/dev/null || true
+  echo "git init + initial commit"
 fi
 if ! git remote 2>&1 | grep -q origin; then
   git remote add origin git@github.com:Razedaisiki/test_demo.git 2>&1 || true
@@ -25,9 +23,14 @@ fi
 BRANCH="resume-user-utils"
 git fetch origin 2>&1 | head -5 || true
 git checkout -B "$BRANCH" 2>&1 | head -5 || true
-git push -u origin "$BRANCH" 2>&1 | head -10 || true
-echo "Branch: $BRANCH @ test_demo.git"
+if ! git push -u origin "$BRANCH" 2>&1 | head -10; then
+  echo "ERROR: Failed to push branch $BRANCH"
+  exit 1
 fi
+echo "Branch: $BRANCH @ test_demo.git"
+rm -rf .agent src 2>/dev/null || true
+xxx init
+xxx remote gh 2>&1 | head -5 || true
 
 echo ""
 echo "=== TASK ==="

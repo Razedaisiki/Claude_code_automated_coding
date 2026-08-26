@@ -8,10 +8,6 @@ echo "mode: gh — commit + push + CI monitor + ci_review"
 
 echo ""
 echo "=== INIT ==="
-rm -rf .agent src 2>/dev/null || true
-xxx init
-xxx remote gh 2>&1 | head -5 || true
-xxx remote status 2>&1 | head -15 || true
 if [ ! -d .git ]; then
   git init -q
   git config user.email "demo@test.com" 2>/dev/null || true
@@ -20,6 +16,13 @@ if [ ! -d .git ]; then
   git commit -qm "initial demo" 2>/dev/null || true
   echo "git init + initial commit"
 fi
+if ! git remote 2>&1 | grep -q origin; then
+  git remote add origin git@github.com:Razedaisiki/test_demo.git 2>&1 || true
+fi
+rm -rf .agent src 2>/dev/null || true
+xxx init
+xxx remote gh 2>&1 | head -5 || true
+xxx remote status 2>&1 | head -15 || true
 
 echo ""
 echo "=== TASK ==="

@@ -8,9 +8,6 @@ echo "mode: local (default) — commit only, no push/CI"
 
 echo ""
 echo "=== INIT ==="
-rm -rf .agent src 2>/dev/null || true
-xxx init
-xxx remote local 2>&1 | head -5 || true
 if [ ! -d .git ]; then
   git init -q
   git config user.email "demo@test.com" 2>/dev/null || true
@@ -19,6 +16,9 @@ if [ ! -d .git ]; then
   git commit -qm "initial demo" 2>/dev/null || true
   echo "git init + initial commit"
 fi
+rm -rf .agent src 2>/dev/null || true
+xxx init
+xxx remote local 2>&1 | head -5 || true
 
 echo ""
 echo "=== TASK ==="
