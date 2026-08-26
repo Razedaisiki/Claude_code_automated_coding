@@ -24,6 +24,26 @@ class Supervisor:
 
     def start(self):
         print("Supervisor started")
+        from agent_system.runtime.git import Git
+
+        git = Git(self.root)
+        status = git.status()
+        if status.strip():
+            print("Workspace has existing changes.")
+            print("Preparing pre-workflow snapshot...")
+            diff = git.diff()
+            try:
+                from agent_system.agents.claude_parent import ClaudeParentAgent
+
+                parent = ClaudeParentAgent(root=self.root)
+                msg = parent.generate_commit_message(diff)
+            except Exception:
+                msg = "chore: preserve existing changes"
+            out = git.commit(msg)
+            print(f"Pre-workflow snapshot committed: {msg}")
+            if out.strip():
+                print(f"  {out.strip()[:120]}")
+
         session = self.sessions.create()
         self.state.update(status="RUNNING", session_id=session["id"])
         print(f"State {self.state.load()['status']} session {session['id']}")

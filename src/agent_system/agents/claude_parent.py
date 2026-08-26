@@ -194,12 +194,22 @@ class ClaudeParentAgent(ParentAgent):
         cm = self._commit_message(task, diff)
         return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm)
 
+    def generate_commit_message(self, diff: str, hint: str = "") -> str:
+        p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
+        system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/commit_message") or "Generate a commit message."
+        user = f"Diff:\n{diff[:6000]}\n\nHint:\n{hint[:1000]}" if hint else f"Diff:\n{diff[:6000]}"
+        text = self._invoke(system, user)
+        if text.startswith("mock result"):
+            return "chore: preserve existing changes"
+        lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+        if lines:
+            msg = lines[0].strip('"').strip("'").strip()
+            if msg:
+                return msg
+        return "chore: preserve existing changes"
+
     def _commit_message(self, task, diff: str) -> str:
-        prefix = "feat" if task.type == "implementation" else "chore"
-        desc = task.description.strip().rstrip(".")
-        if len(desc) > 72:
-            desc = desc[:69] + "..."
-        return f"{prefix}: {desc} [{task.id}]"
+        return self.generate_commit_message(diff, hint=task.description)
 
     def _llm_review(self, task, result: AgentResult, diff: str, ctx: ProjectContext):
         try:
