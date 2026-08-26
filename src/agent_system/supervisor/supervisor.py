@@ -26,7 +26,7 @@ class Supervisor:
         print("Supervisor started")
         from agent_system.runtime.git import Git
 
-        Git(self.root).ensure_runtime_excludes()
+        Git(self.root).ensure_runtime_isolation()
         git = Git(self.root)
         raw_status = git.status()
         filtered = "\n".join(l for l in raw_status.splitlines() if ".agent/" not in l and "__pycache__" not in l)

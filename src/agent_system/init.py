@@ -44,7 +44,7 @@ def init_workspace(root: Path = None):
 
     from agent_system.runtime.git import Git
 
-    Git(root).ensure_runtime_excludes()
+    Git(root).ensure_runtime_isolation()
 
     task_file = root / "TASK.md"
     if not task_file.exists():
