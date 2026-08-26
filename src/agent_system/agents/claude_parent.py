@@ -88,6 +88,15 @@ class ClaudeParentAgent(ParentAgent):
                             sha = r.stdout.strip() if r.returncode == 0 else None
                             cfg = DeliveryConfig.load(self.root)
                             if sha and cfg.mode == "gh":
+                                push_res = self.git.push()
+                                if push_res["status"] == "SUCCESS":
+                                    print(f"  Pushed: {push_res['message'][:80]}")
+                                elif push_res["status"] == "REMOTE_FAILED":
+                                    print(f"  Push failed (fallback to local): {push_res['message'][:80]}")
+                                    continue
+                                elif push_res["status"] == "NO_REMOTE":
+                                    print("  No remote, skipping CI")
+                                    continue
                                 from agent_system.supervisor.state import StateManager
 
                                 StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id})
