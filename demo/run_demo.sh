@@ -52,6 +52,11 @@ if [ -f .agent/milestones/001.md ]; then
 fi
 
 echo ""
+echo "=== DELIVERY ==="
+echo "mode: $(grep -A1 'delivery:' .agent/config.yaml 2>&1 | grep mode | awk '{print $2}' || echo 'local')"
+echo "hint: xxx remote gh  to enable GitHub delivery, xxx remote status to inspect"
+
+echo ""
 echo "=== DONE ==="
 echo "Demo workspace: $SCRIPT_DIR"
 echo "To clean: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git"
