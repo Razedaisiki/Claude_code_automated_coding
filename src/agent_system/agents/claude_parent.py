@@ -163,6 +163,24 @@ class ClaudeParentAgent(ParentAgent):
             f"CI status: {ci_status}\n\nCI logs:\n{ci_logs[:4000]}"
         )
         text = self._invoke(sys_text, user)
+        try:
+            import json
+
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(text[start:end])
+                decision = data.get("decision", "")
+                if decision in ("APPROVED", "NO_CODE_CHANGE", "APPROVED_WITH_NOTE"):
+                    return {"decision": "APPROVED_WITH_NOTE" if decision == "NO_CODE_CHANGE" else decision, "reason": data.get("reason", text[:800]), "classification": data.get("classification", ""), "correction": data.get("correction", "")}
+                if decision == "CHANGES_REQUIRED":
+                    corr = data.get("correction", {})
+                    if isinstance(corr, dict):
+                        desc = corr.get("description", "")
+                        return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": desc or str(corr), "classification": "CHANGE_RELATED"}
+                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": str(corr) if corr else text}
+        except Exception:
+            pass
         if "APPROVE" in text.upper() or "CI_APPROVED" in text.upper():
             return {"decision": "APPROVED", "reason": text[:800]}
         low = text.lower()
