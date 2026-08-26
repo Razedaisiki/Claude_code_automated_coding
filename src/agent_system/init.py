@@ -42,6 +42,20 @@ def init_workspace(root: Path = None):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(item, dest)
 
+    git_dir = root / ".git"
+    if git_dir.exists() and git_dir.is_dir():
+        exclude = git_dir / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        needed = [".agent/", "__pycache__/", "*.pyc"]
+        to_add = [l for l in needed if l not in existing]
+        if to_add:
+            with exclude.open("a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                for l in to_add:
+                    f.write(l + "\n")
+
     task_file = root / "TASK.md"
     if not task_file.exists():
         task_file.write_text("# Task\n\nDescribe your task here.\n", encoding="utf-8")
