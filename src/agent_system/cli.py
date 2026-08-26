@@ -24,6 +24,46 @@ def cmd_resume(args):
     sup.resume()
 
 
+def cmd_remote(args):
+    from pathlib import Path
+
+    from agent_system.delivery import DeliveryConfig
+    from agent_system.runtime.git import Git
+    from agent_system.runtime.github import GitHub
+
+    root = Path.cwd()
+    action = getattr(args, "remote_action", None)
+    if action == "status":
+        cfg = DeliveryConfig.load(root)
+        git = Git(root)
+        gh = GitHub(root)
+        print(f"Delivery mode: {cfg.mode}")
+        print("")
+        print("Git:")
+        print(f"  repository: {'ready' if git.has_commits() else 'not initialized'}")
+        print(f"  remote: {'detected' if git.has_remote() else 'not configured'}")
+        if git.has_remote():
+            print(f"  url: {git.remote_url()}")
+        print(f"  push: user managed")
+        print("")
+        print("GitHub:")
+        has_gh = gh._has_gh()
+        print(f"  gh CLI: {'available' if has_gh else 'not found'}")
+        if has_gh:
+            r = gh.shell.run("gh auth status 2>&1 | head -5")
+            authed = "authenticated" if "Logged in" in r.stdout or "active" in r.stdout else "not authenticated"
+            print(f"  authentication: {authed}")
+        else:
+            print("  authentication: unknown")
+        return
+    if action in ("local", "gh"):
+        cfg = DeliveryConfig(mode=action)
+        cfg.save(root)
+        print(f"Delivery mode set to: {action}")
+        return
+    print("Usage: xxx remote <local|gh|status>")
+
+
 def cmd_milestone(args):
     from pathlib import Path
 
@@ -62,6 +102,10 @@ def main():
 
     p_resume = sub.add_parser("resume", help="resume workflow")
     p_resume.set_defaults(func=cmd_resume)
+
+    p_remote = sub.add_parser("remote", help="set delivery mode")
+    p_remote.add_argument("remote_action", nargs="?", choices=["local", "gh", "status"], help="delivery mode")
+    p_remote.set_defaults(func=cmd_remote)
 
     p_milestone = sub.add_parser("milestone", help="create milestone from completed workflow")
     p_milestone.add_argument("--feedback", type=str, default=None, help="human feedback for milestone")
