@@ -55,6 +55,14 @@ class Git:
         r = self.shell.run("git rev-parse HEAD 2>&1")
         return r.returncode == 0
 
+    def has_remote(self) -> bool:
+        r = self.shell.run("git remote 2>&1")
+        return bool(r.stdout.strip())
+
+    def remote_url(self) -> str:
+        r = self.shell.run("git remote get-url origin 2>&1")
+        return r.stdout.strip() if r.returncode == 0 else ""
+
     def _quote(self, s: str) -> str:
         return "'" + s.replace("'", "'\"'\"'") + "'"
 
