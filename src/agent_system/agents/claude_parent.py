@@ -63,7 +63,16 @@ class ClaudeParentAgent(ParentAgent):
 
             _st = _SM(self.root).load()
             start_idx = 0
-            if _st.get("delivery", {}).get("task_id"):
+            if isinstance(_st.get("delivery", {}).get("task_index"), int):
+                start_idx = _st["delivery"]["task_index"] + 1
+                if 0 < start_idx < len(tasks):
+                    print(f"  Resuming from task index {start_idx}")
+                elif start_idx >= len(tasks):
+                    print("  All tasks already completed, skipping execution")
+                    tasks = []
+                else:
+                    start_idx = 0
+            elif _st.get("delivery", {}).get("task_id"):
                 done_id = _st["delivery"]["task_id"]
                 ci_s = _st["delivery"].get("ci_status", "")
                 if ci_s in ("CI_PASSED", "CI_NOT_DETECTED", "APPROVED_WITH_NOTE", "CI_NOT_CONFIGURED"):
@@ -72,10 +81,10 @@ class ClaudeParentAgent(ParentAgent):
                             start_idx = _idx + 1
                             break
                     if start_idx > 0:
-                        print(f"  Resuming from task index {start_idx}")
+                        print(f"  Resuming from task index {start_idx} (by task_id)")
             tasks = tasks[start_idx:]
 
-            for t in tasks:
+            for task_index, t in enumerate(tasks, start=start_idx):
                 print(f"  Dispatch: {t.id} -> {t.role}")
                 last_diff = ""
                 for attempt in range(1, 4):
