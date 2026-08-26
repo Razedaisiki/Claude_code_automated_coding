@@ -2,6 +2,12 @@ import json
 from pathlib import Path
 
 
+ALLOWED_STATUSES = {
+    "INITIALIZED", "RUNNING", "REVIEW_PENDING", "COMMITTING",
+    "PUSHING", "WAITING_CI", "CI_PASSED", "CI_FAILED", "COMPLETED", "FAILED",
+}
+
+
 class StateManager:
     def __init__(self, root: Path = None):
         self.root = root or Path.cwd()
