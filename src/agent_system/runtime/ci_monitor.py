@@ -14,12 +14,12 @@ class CIMonitor:
 
     def wait_for_commit(self, commit_sha: str, poll_interval: int = None, timeout: int = None) -> dict:
         if not commit_sha:
-            return {"status": "CI_NOT_CONFIGURED", "runs": [], "message": "no commit sha"}
+            return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no commit sha"}
 
         poll = poll_interval or self.poll_interval
         tout = timeout or self.timeout
 
-        discovery_window = 30
+        discovery_window = 60
         start = time.time()
         runs: List[dict] = []
         while time.time() - start < discovery_window:
@@ -29,7 +29,7 @@ class CIMonitor:
             time.sleep(5)
 
         if not runs:
-            return {"status": "CI_NOT_CONFIGURED", "runs": [], "message": "no runs for commit"}
+            return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no runs detected for commit"}
 
         deadline = time.time() + tout
         while time.time() < deadline:
@@ -52,9 +52,11 @@ class CIMonitor:
                 return {"status": "CI_FAILED", "runs": runs, "failed_logs": logs, "message": "ci failed"}
 
             if all_done:
-                ok = all(r.get("conclusion") in ("success", "skipped", "neutral", "completed", None) or r.get("status") == "completed" for r in runs)
+                acceptable = {"success", "skipped", "neutral"}
+                ok = all(r.get("status") == "completed" and r.get("conclusion") in acceptable for r in runs)
                 if ok:
                     return {"status": "CI_PASSED", "runs": runs, "message": "all passed"}
+                return {"status": "CI_FAILED", "runs": runs, "message": f"unexpected conclusion: {runs[0].get('conclusion') if runs else 'unknown'}"}
 
             if time.time() + poll >= deadline:
                 break

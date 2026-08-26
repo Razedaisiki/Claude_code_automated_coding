@@ -85,8 +85,8 @@ class Supervisor:
             if ci_res["status"] == "CI_FAILED":
                 print(f"CI_FAILED: {ci_res.get('message','')[:80]}")
                 self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_FAILED"})
-            elif ci_res["status"] == "CI_NOT_CONFIGURED":
-                self.state.update(status="COMPLETED", delivery={**state.get("delivery", {}), "ci_status": "CI_NOT_CONFIGURED"})
+            elif ci_res["status"] == "CI_NOT_DETECTED":
+                self.state.update(status="COMPLETED", delivery={**state.get("delivery", {}), "ci_status": "CI_NOT_DETECTED"})
                 print("No CI, completing")
                 return
             else:
