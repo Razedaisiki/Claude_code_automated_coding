@@ -69,12 +69,8 @@ class ClaudeCodeRuntime(CodingRuntime):
                 result_text = "done (max turns)"
 
             after = set(self.git.changed_files())
-            changed = sorted(after - before) if after != before else sorted(after)
-            if not changed:
-                stat = self.git.diff_stat()
-                if stat.strip():
-                    changed = [l.split("|")[0].strip() for l in stat.splitlines() if "|" in l]
-            artifacts = changed if changed else task.files
+            changed = sorted(after - before)
+            artifacts = [c for c in changed if ".agent/" not in c and "__pycache__" not in c and not c.endswith(".pyc")]
             return AgentResult(status="SUCCESS", message=result_text[:800] if result_text else "done", artifacts=artifacts)
         except Exception as e:
             return AgentResult(status="SUCCESS", message=f"mock code for {task.description} (fallback: {e:.60})", artifacts=task.files)
