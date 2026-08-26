@@ -59,6 +59,21 @@ class ClaudeParentAgent(ParentAgent):
             from agent_system.agents.code_agent import CodeAgent
             from agent_system.agents.models import AgentTask
             from agent_system.agents.subagent import MockTestAgent
+            from agent_system.supervisor.state import StateManager as _SM
+
+            _st = _SM(self.root).load()
+            start_idx = 0
+            if _st.get("delivery", {}).get("task_id"):
+                done_id = _st["delivery"]["task_id"]
+                ci_s = _st["delivery"].get("ci_status", "")
+                if ci_s in ("CI_PASSED", "CI_NOT_DETECTED", "APPROVED_WITH_NOTE", "CI_NOT_CONFIGURED"):
+                    for _idx, _t in enumerate(tasks):
+                        if _t.id == done_id:
+                            start_idx = _idx + 1
+                            break
+                    if start_idx > 0:
+                        print(f"  Resuming from task index {start_idx}")
+            tasks = tasks[start_idx:]
 
             for t in tasks:
                 print(f"  Dispatch: {t.id} -> {t.role}")
@@ -97,28 +112,28 @@ class ClaudeParentAgent(ParentAgent):
                                 print("  Local delivery: committed")
 
                             if dres.mode == "gh" and dres.push_status == "SUCCESS":
-                                StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id})
+                                StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": tasks.index(t)})
                                 print(f"  WAITING_CI for {sha[:7]}")
                                 if dres.ci_status == "CI_PASSED":
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_PASSED"})
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_PASSED", "task_id": t.id, "task_index": tasks.index(t)})
                                     print("  CI_PASSED")
                                 elif dres.ci_status == "CI_FAILED":
                                     print(f"  CI_FAILED")
                                     ci_decision = self.ci_review(ci_status="CI_FAILED", ci_logs=dres.failed_logs, commit_sha=sha)
                                     if ci_decision["decision"] == "CHANGES_REQUIRED":
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED"})
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": tasks.index(t)})
                                         correction = ci_decision.get("correction", "")[:500]
                                         print(f"  CI correction needed: {correction[:80]}")
                                         t = AgentTask(id=t.id, role=t.role, description=correction or t.description, files=t.files)
                                         last_reason = ci_decision["reason"]
                                         continue
                                     else:
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": ci_decision["decision"]})
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": ci_decision["decision"], "task_id": t.id, "task_index": tasks.index(t)})
                                 elif dres.ci_status == "CI_NOT_DETECTED":
                                     print("  No CI runs detected, continuing")
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_NOT_DETECTED"})
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_NOT_DETECTED", "task_id": t.id, "task_index": tasks.index(t)})
                                 else:
-                                    StateManager(self.root).update(status="RUNNING")
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": tasks.index(t)})
                         break
                     cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
                     if cur_diff.strip() == last_diff.strip() and attempt > 1:

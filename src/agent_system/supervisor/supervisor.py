@@ -79,16 +79,14 @@ class Supervisor:
 
             ci_res = CIMonitor(self.root).wait_for_commit(sha)
             if ci_res["status"] == "CI_PASSED":
-                self.state.update(status="COMPLETED", delivery={**state.get("delivery", {}), "ci_status": "CI_PASSED"})
-                print("CI_PASSED, completing")
-                return
-            if ci_res["status"] == "CI_FAILED":
+                self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_PASSED"})
+                print("CI_PASSED, continuing to next task")
+            elif ci_res["status"] == "CI_FAILED":
                 print(f"CI_FAILED: {ci_res.get('message','')[:80]}")
                 self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_FAILED"})
             elif ci_res["status"] == "CI_NOT_DETECTED":
-                self.state.update(status="COMPLETED", delivery={**state.get("delivery", {}), "ci_status": "CI_NOT_DETECTED"})
-                print("No CI, completing")
-                return
+                self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_NOT_DETECTED"})
+                print("No CI, continuing")
             else:
                 self.state.update(status="RUNNING")
         sid = state.get("session_id")
