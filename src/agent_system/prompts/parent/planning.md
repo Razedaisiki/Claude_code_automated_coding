@@ -30,6 +30,20 @@ Avoid:
 - creating tasks for validation only.
 - creating optional cleanup tasks.
 
+# Commit Boundary Rule
+
+Each executable task represents one Git commit.
+
+Every task must leave the repository in a valid, internally consistent state.
+
+A task must not intentionally leave required coupled work incomplete if doing so would cause the repository's existing CI to fail.
+
+If multiple code changes are tightly coupled and must exist together for the repository to remain valid, combine them into a single task.
+
+Prefer fewer complete commits over many partial commits.
+
+Each task should be independently reviewable and safe to run through the repository's full CI pipeline.
+
 # Output Format
 
 Output markdown only. Use exactly:
