@@ -27,6 +27,17 @@ class DeliveryRuntime:
     def commit(self, message: str) -> str:
         return self.git.commit(message)
 
+    def push(self, commit_sha: str = None) -> dict:
+        if self.config.mode != "gh":
+            return {"status": "SKIPPED", "message": "local mode", "commit_sha": commit_sha}
+        res = self.git.push()
+        return {"status": res["status"], "message": res["message"], "commit_sha": commit_sha}
+
+    def wait_ci(self, commit_sha: str) -> dict:
+        if not commit_sha:
+            return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no sha"}
+        return CIMonitor(self.root).wait_for_commit(commit_sha)
+
     def deliver(self, commit_sha: str = None) -> DeliveryResult:
         if commit_sha is None:
             r = self.git.shell.run("git rev-parse HEAD 2>&1")
