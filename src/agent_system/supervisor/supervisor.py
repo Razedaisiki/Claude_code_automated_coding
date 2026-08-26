@@ -26,6 +26,7 @@ class Supervisor:
         print("Supervisor started")
         from agent_system.runtime.git import Git
 
+        Git(self.root).ensure_runtime_excludes()
         git = Git(self.root)
         status = git.status()
         if status.strip():

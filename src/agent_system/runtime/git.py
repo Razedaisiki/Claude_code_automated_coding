@@ -9,6 +9,22 @@ class Git:
         self.repo_root = self.root
         self.shell = Shell(self.root)
 
+    def ensure_runtime_excludes(self):
+        git_dir = self.root / ".git"
+        if not git_dir.exists() or not git_dir.is_dir():
+            return
+        exclude = git_dir / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        needed = [".agent/", "__pycache__/", "*.pyc"]
+        to_add = [l for l in needed if l not in existing]
+        if to_add:
+            with exclude.open("a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                for l in to_add:
+                    f.write(l + "\n")
+
     def diff(self, args: str = "") -> str:
         base = f"git diff {args}".strip() if args else "git diff"
         r = self.shell.run(base)
@@ -41,15 +57,25 @@ class Git:
         return out
 
     def status(self) -> str:
-        r = self.shell.run("git status --porcelain")
+        r = self.shell.run("git status --porcelain -uall")
         return r.stdout
 
     def commit(self, message: str) -> str:
         if not message or not message.strip():
             return "empty message"
+        self.ensure_runtime_excludes()
         self.shell.run("git add -A")
         r = self.shell.run(f"git commit -m {self._quote(message)}")
         return r.stdout + r.stderr
+
+    def commit_diff(self, sha: str) -> str:
+        if not sha:
+            return ""
+        r = self.shell.run(f"git show --format= --find-renames {sha} 2>&1")
+        if r.stdout.strip():
+            return r.stdout
+        r2 = self.shell.run(f"git show {sha} 2>&1 | head -200")
+        return r2.stdout
 
     def has_commits(self) -> bool:
         r = self.shell.run("git rev-parse HEAD 2>&1")
@@ -63,13 +89,10 @@ class Git:
         r = self.shell.run("git remote get-url origin 2>&1")
         return r.stdout.strip() if r.returncode == 0 else ""
 
-    def push(self, remote: str = "origin", branch: str = None) -> dict:
+    def push(self) -> dict:
         if not self.has_remote():
             return {"status": "NO_REMOTE", "message": "no remote configured"}
-        if branch is None:
-            r = self.shell.run("git rev-parse --abbrev-ref HEAD")
-            branch = r.stdout.strip() or "main"
-        r = self.shell.run(f"git push {remote} {branch} 2>&1")
+        r = self.shell.run("git push 2>&1")
         out = r.stdout + r.stderr
         if r.returncode == 0:
             return {"status": "SUCCESS", "message": out.strip()}

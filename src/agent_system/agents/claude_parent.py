@@ -64,7 +64,7 @@ class ClaudeParentAgent(ParentAgent):
                 print(f"  Dispatch: {t.id} -> {t.role}")
                 last_diff = ""
                 for attempt in range(1, 4):
-                    diff_before = self.git.diff("-- src")
+                    diff_before = self.git.diff()
                     if t.role == "code":
                         if attempt > 1:
                             t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files)
@@ -72,7 +72,7 @@ class ClaudeParentAgent(ParentAgent):
                     else:
                         result = MockTestAgent().execute(t)
 
-                    diff_after = self.git.diff("-- src")
+                    diff_after = self.git.diff()
                     review = self._review(t, result, diff_before, diff_after)
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
@@ -168,7 +168,8 @@ class ClaudeParentAgent(ParentAgent):
         ctx = load_context(self.root)
         from agent_system.runtime.git import Git
 
-        diff = Git(self.root).diff()
+        git = Git(self.root)
+        diff = git.commit_diff(commit_sha) if commit_sha else git.diff()
         user = (
             f"Task:\n{task or ctx.task}\n\n"
             f"Plan:\n{ctx.plan[:3000]}\n\n"
