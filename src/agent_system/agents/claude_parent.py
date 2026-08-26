@@ -44,11 +44,22 @@ class ClaudeParentAgent(ParentAgent):
         if ctx.milestones:
             print("  milestones loaded")
 
-        plan_text = self._plan(ctx.task or task, ctx)
         plan_file = self.root / ".agent" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text(plan_text, encoding="utf-8")
-        print("  plan.md created")
+        existing_plan = plan_file.read_text(encoding="utf-8") if plan_file.exists() else ""
+        try:
+            from agent_system.supervisor.state import StateManager as _SM2
+
+            _is_resume = bool(_SM2(self.root).load().get("delivery", {}).get("task_id"))
+        except Exception:
+            _is_resume = False
+        if _is_resume and existing_plan.strip():
+            plan_text = existing_plan
+            print("  plan.md reused (resume)")
+        else:
+            plan_text = self._plan(ctx.task or task, ctx)
+            plan_file.parent.mkdir(parents=True, exist_ok=True)
+            plan_file.write_text(plan_text, encoding="utf-8")
+            print("  plan.md created")
 
         tasks = parse_plan(plan_text)
         if tasks:
