@@ -16,3 +16,15 @@ demo/demo_local/src/__pycache__/
 demo/demo_gh/.agent/
 demo/demo_gh/.git/
 demo/demo_gh/src/__pycache__/
+demo/demo_a/.agent/
+demo/demo_a/.git/
+demo/demo_a/src/__pycache__/
+demo/demo_b/.agent/
+demo/demo_b/.git/
+demo/demo_b/src/__pycache__/
+demo/demo_c/.agent/
+demo/demo_c/.git/
+demo/demo_c/src/__pycache__/
+demo/demo_d/.agent/
+demo/demo_d/.git/
+demo/demo_d/src/__pycache__/
