@@ -13,6 +13,22 @@ class GitHub:
         r = self.shell.run("which gh 2>&1")
         return r.returncode == 0
 
+    def get_runs_for_commit(self, commit_sha: str) -> list:
+        if not self._has_gh() or not commit_sha:
+            return []
+        r = self.shell.run(f"gh run list --commit {commit_sha} --json databaseId,status,conclusion,workflowName,headSha 2>&1")
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        try:
+            import json
+
+            data = json.loads(r.stdout)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+        return []
+
     def get_latest_run(self, branch: str = None) -> Optional[dict]:
         if not self._has_gh():
             return None
@@ -48,3 +64,9 @@ class GitHub:
             return ""
         r = self.shell.run(f"gh run view {run_id} --log 2>&1 | head -100")
         return r.stdout[:5000] if r.stdout else ""
+
+    def get_failed_logs(self, run_id: str) -> str:
+        if not self._has_gh():
+            return ""
+        r = self.shell.run(f"gh run view {run_id} --log-failed 2>&1 | head -200")
+        return r.stdout[:5000] if r.stdout else self.get_run_logs(run_id)
