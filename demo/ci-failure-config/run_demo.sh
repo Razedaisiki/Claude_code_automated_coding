@@ -23,6 +23,12 @@ fi
 if ! git remote 2>&1 | grep -q origin; then
   git remote add origin git@github.com:Razedaisiki/test_demo.git 2>&1 || true
 fi
+BRANCH="ci-failure-config"
+git fetch origin 2>&1 | head -5 || true
+git checkout -B "$BRANCH" 2>&1 | head -5 || true
+git push -u origin "$BRANCH" 2>&1 | head -10 || true
+echo "Branch: $BRANCH @ test_demo.git"
+fi
 
 echo ""
 echo "=== TASK ==="

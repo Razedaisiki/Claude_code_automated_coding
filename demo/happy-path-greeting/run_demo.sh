@@ -1,0 +1,57 @@
+#!/bin/bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+echo "=== Demo A — Happy Path (gh) ==="
+echo "Task: greet(name) in src/greeting.py"
+
+echo ""
+echo "=== INIT ==="
+rm -rf .agent src 2>/dev/null || true
+xxx init
+xxx remote gh 2>&1 | head -5 || true
+xxx remote status 2>&1 | head -15 || true
+if [ ! -d .git ]; then
+  git init -q
+  git config user.email "demo@test.com" 2>/dev/null || true
+  git config user.name "demo" 2>/dev/null || true
+  git add . 2>/dev/null || true
+  git commit -qm "initial demo" 2>/dev/null || true
+  echo "git init + initial commit"
+fi
+BRANCH="happy-path-greeting"
+if ! git remote 2>&1 | grep -q origin; then
+  git remote add origin git@github.com:Razedaisiki/test_demo.git 2>&1 || true
+fi
+git fetch origin 2>&1 | head -5 || true
+git checkout -B "$BRANCH" 2>&1 | head -5 || true
+git push -u origin "$BRANCH" 2>&1 | head -10 || true
+echo "Branch: $BRANCH @ test_demo.git (branch: happy-path-greeting — Task: greet(name) in src/greeting.py)"
+
+echo ""
+echo "=== TASK ==="
+cat TASK.md
+
+echo ""
+echo "=== RUN ==="
+xxx run
+
+echo ""
+echo "=== plan.md ==="
+cat .agent/plan.md 2>&1 | head -40
+
+echo ""
+echo "=== state ==="
+cat .agent/state.json 2>&1 | head -20
+
+echo ""
+echo "=== git log ==="
+git log --oneline -3 2>&1 | head -5
+
+echo ""
+echo "=== DONE (demo_a) ==="
+echo "Shared remote: test_demo.git — clean up before next demo:"
+echo "  rm src/greeting.py  # or the file created by this demo"
+echo "  git add -A && git commit -m 'chore: clean demo_a artifacts' && git push"
+echo "Or: rm -rf $SCRIPT_DIR/.agent $SCRIPT_DIR/src $SCRIPT_DIR/.git (local clean only)"
