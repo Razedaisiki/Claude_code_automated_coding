@@ -77,18 +77,21 @@ class ClaudeParentAgent(ParentAgent):
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
                         if t.type == "implementation" and review.commit_message:
+                            from agent_system.runtime.delivery_runtime import DeliveryRuntime
+
+                            delivery = DeliveryRuntime(self.root)
                             msg = review.commit_message
-                            out = self.git.commit(msg)
+                            delivery.commit(msg)
                             print(f"  Committed: {msg}")
-                            if out.strip():
-                                print(f"    {out.strip()[:120]}")
-                            push_res = self.git.push()
-                            if push_res["status"] == "SUCCESS":
-                                print(f"  Pushed: {push_res['message'][:80]}")
-                            elif push_res["status"] == "REMOTE_FAILED":
-                                print(f"  Push failed (fallback to local): {push_res['message'][:80]}")
-                            elif push_res["status"] == "NO_REMOTE":
+                            dres = delivery.deliver()
+                            if dres.push_status == "SUCCESS":
+                                print(f"  Pushed: {dres.push_message[:80]}")
+                            elif dres.push_status == "REMOTE_FAILED":
+                                print(f"  Push failed (fallback to local): {dres.push_message[:80]}")
+                            elif dres.push_status == "NO_REMOTE":
                                 print("  Local mode: no remote")
+                            elif dres.push_status == "SKIPPED":
+                                print("  Local delivery: committed")
                         break
                     cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
                     if cur_diff.strip() == last_diff.strip() and attempt > 1:
