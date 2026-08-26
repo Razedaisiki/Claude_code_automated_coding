@@ -10,3 +10,9 @@ build/
 demo/.agent/
 demo/.git/
 demo/src/__pycache__/
+demo_local/.agent/
+demo_local/.git/
+demo_local/src/__pycache__/
+demo_gh/.agent/
+demo_gh/.git/
+demo_gh/src/__pycache__/
