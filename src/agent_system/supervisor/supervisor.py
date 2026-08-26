@@ -71,6 +71,25 @@ class Supervisor:
 
     def resume(self):
         state = self.state.load()
+        if state.get("status") == "WAITING_CI" and state.get("delivery", {}).get("commit_sha"):
+            sha = state["delivery"]["commit_sha"]
+            print(f"Resuming WAITING_CI for {sha[:7]}")
+            from agent_system.runtime.ci_monitor import CIMonitor
+
+            ci_res = CIMonitor(self.root).wait_for_commit(sha)
+            if ci_res["status"] == "CI_PASSED":
+                self.state.update(status="COMPLETED", delivery={**state.get("delivery", {}), "ci_status": "CI_PASSED"})
+                print("CI_PASSED, completing")
+                return
+            if ci_res["status"] == "CI_FAILED":
+                print(f"CI_FAILED: {ci_res.get('message','')[:80]}")
+                self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_FAILED"})
+            elif ci_res["status"] == "CI_NOT_CONFIGURED":
+                self.state.update(status="COMPLETED", delivery={**state.get("delivery", {}), "ci_status": "CI_NOT_CONFIGURED"})
+                print("No CI, completing")
+                return
+            else:
+                self.state.update(status="RUNNING")
         sid = state.get("session_id")
         if not sid:
             print("No session to resume")

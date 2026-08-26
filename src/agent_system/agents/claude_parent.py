@@ -77,21 +77,54 @@ class ClaudeParentAgent(ParentAgent):
                     if review.status == "SUCCESS":
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
                         if t.type == "implementation" and review.commit_message:
+                            from agent_system.delivery import DeliveryConfig
                             from agent_system.runtime.delivery_runtime import DeliveryRuntime
 
                             delivery = DeliveryRuntime(self.root)
                             msg = review.commit_message
                             delivery.commit(msg)
                             print(f"  Committed: {msg}")
-                            dres = delivery.deliver()
-                            if dres.push_status == "SUCCESS":
-                                print(f"  Pushed: {dres.push_message[:80]}")
-                            elif dres.push_status == "REMOTE_FAILED":
-                                print(f"  Push failed (fallback to local): {dres.push_message[:80]}")
-                            elif dres.push_status == "NO_REMOTE":
-                                print("  Local mode: no remote")
-                            elif dres.push_status == "SKIPPED":
-                                print("  Local delivery: committed")
+                            r = self.git.shell.run("git rev-parse HEAD 2>&1")
+                            sha = r.stdout.strip() if r.returncode == 0 else None
+                            cfg = DeliveryConfig.load(self.root)
+                            if sha and cfg.mode == "gh":
+                                from agent_system.supervisor.state import StateManager
+
+                                StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id})
+                                print(f"  WAITING_CI for {sha[:7]}")
+                                from agent_system.runtime.ci_monitor import CIMonitor
+
+                                ci_res = CIMonitor(self.root).wait_for_commit(sha)
+                                if ci_res["status"] == "CI_PASSED":
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_PASSED"})
+                                    print("  CI_PASSED")
+                                elif ci_res["status"] == "CI_FAILED":
+                                    print(f"  CI_FAILED: {ci_res.get('message','')[:80]}")
+                                    ci_decision = self.ci_review(ci_status="CI_FAILED", ci_logs=ci_res.get("failed_logs", ""), commit_sha=sha)
+                                    if ci_decision["decision"] == "CHANGES_REQUIRED":
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED"})
+                                        correction = ci_decision.get("correction", "")[:500]
+                                        print(f"  CI correction needed: {correction[:80]}")
+                                        t = AgentTask(id=t.id, role=t.role, description=correction or t.description, files=t.files)
+                                        last_reason = ci_decision["reason"]
+                                        continue
+                                    else:
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": ci_decision["decision"]})
+                                elif ci_res["status"] == "CI_NOT_CONFIGURED":
+                                    print("  No CI runs for commit (CI_NOT_CONFIGURED), continuing")
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_NOT_CONFIGURED"})
+                                else:
+                                    StateManager(self.root).update(status="RUNNING")
+                            else:
+                                dres = delivery.deliver()
+                                if dres.push_status == "SUCCESS":
+                                    print(f"  Pushed: {dres.push_message[:80]}")
+                                elif dres.push_status == "REMOTE_FAILED":
+                                    print(f"  Push failed (fallback to local): {dres.push_message[:80]}")
+                                elif dres.push_status == "NO_REMOTE":
+                                    print("  Local mode: no remote")
+                                elif dres.push_status == "SKIPPED":
+                                    print("  Local delivery: committed")
                         break
                     cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
                     if cur_diff.strip() == last_diff.strip() and attempt > 1:
