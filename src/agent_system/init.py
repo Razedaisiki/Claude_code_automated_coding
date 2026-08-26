@@ -15,9 +15,23 @@ def init_workspace(root: Path = None):
     state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.2"}
     (agent_dir / "state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
-    (agent_dir / "config.yaml").write_text(
-        "version: 0.1.0\nmodel: mock\nprompt_version: v0.2\n", encoding="utf-8"
-    )
+    cfg = agent_dir / "config.yaml"
+    if cfg.exists():
+        text = cfg.read_text(encoding="utf-8")
+        if "delivery:" not in text:
+            with cfg.open("a", encoding="utf-8") as f:
+                if not text.endswith("\n"):
+                    f.write("\n")
+                f.write("delivery:\n  mode: local\n")
+                f.write("prompt_version: v0.2\n" if "prompt_version" not in text else "")
+        elif "prompt_version" not in text:
+            with cfg.open("a", encoding="utf-8") as f:
+                f.write("prompt_version: v0.2\n")
+    else:
+        cfg.write_text(
+            "version: 0.1.0\nmodel: mock\nprompt_version: v0.2\ndelivery:\n  mode: local\n",
+            encoding="utf-8",
+        )
 
     src_prompts = Path(__file__).parent / "prompts"
     if src_prompts.exists():
