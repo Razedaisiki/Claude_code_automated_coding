@@ -63,6 +63,18 @@ class Git:
         r = self.shell.run("git remote get-url origin 2>&1")
         return r.stdout.strip() if r.returncode == 0 else ""
 
+    def push(self, remote: str = "origin", branch: str = None) -> dict:
+        if not self.has_remote():
+            return {"status": "NO_REMOTE", "message": "no remote configured"}
+        if branch is None:
+            r = self.shell.run("git rev-parse --abbrev-ref HEAD")
+            branch = r.stdout.strip() or "main"
+        r = self.shell.run(f"git push {remote} {branch} 2>&1")
+        out = r.stdout + r.stderr
+        if r.returncode == 0:
+            return {"status": "SUCCESS", "message": out.strip()}
+        return {"status": "REMOTE_FAILED", "message": out.strip()}
+
     def _quote(self, s: str) -> str:
         return "'" + s.replace("'", "'\"'\"'") + "'"
 
