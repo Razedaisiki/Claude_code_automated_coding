@@ -117,11 +117,16 @@ class ClaudeParentAgent(ParentAgent):
                             from agent_system.runtime.delivery_runtime import DeliveryRuntime
                             from agent_system.supervisor.state import StateManager
 
+                            cfg_pre = DeliveryConfig.load(self.root)
                             delivery = DeliveryRuntime(self.root)
                             msg = review.commit_message
+                            if cfg_pre.mode == "local" and not self.git.is_workspace_repo():
+                                print(f"  Local mode (no git): skipping commit: {msg}")
+                                StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "task_id": t.id, "task_index": task_index, "commit_sha": None})
+                                break
                             delivery.commit(msg)
                             print(f"  Committed: {msg}")
-                            r = self.git.shell.run("git rev-parse HEAD 2>&1")
+                            r = self.git.shell.run("git rev-parse HEAD")
                             sha = r.stdout.strip() if r.returncode == 0 else None
                             cfg = DeliveryConfig.load(self.root)
                             if cfg.mode == "gh" and sha:
@@ -287,10 +292,14 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (optional)", artifacts=result.artifacts)
         if task.role != "code":
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
+        from agent_system.delivery import DeliveryConfig as _DC2
+
         raw_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
         filtered = "\n".join(l for l in raw_diff.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l)
         diff = filtered.strip()
         if not diff:
+            if _DC2.load(self.root).mode == "local":
+                return self._review_local_no_diff(task, result)
             return AgentResult(status="FAILED", message=f"task {task.id} produced no project changes", artifacts=result.artifacts)
         ctx = load_context(self.root)
         score = self._llm_review(task, result, diff, ctx)
@@ -300,6 +309,21 @@ class ClaudeParentAgent(ParentAgent):
             print(f"    diff: {diff[:200]}")
         cm = self._commit_message(task, diff)
         return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm)
+
+    def _review_local_no_diff(self, task, result) -> "AgentResult":
+        from agent_system.agents.models import AgentResult as _AR
+
+        hint_files = list(getattr(task, "files", None) or [])
+        candidates = []
+        for rel in hint_files:
+            p = self.root / rel
+            if p.is_file():
+                candidates.append(rel)
+        if candidates:
+            print(f"    local mode: no git diff, accepting file existence: {candidates}")
+            return _AR(status="SUCCESS", message=f"task {task.id} accepted (local, no diff)", artifacts=result.artifacts)
+        print(f"    local mode: no diff and no expected files for {task.id}, still failing")
+        return _AR(status="FAILED", message=f"task {task.id} produced no project changes", artifacts=result.artifacts)
 
     def generate_commit_message(self, diff: str, hint: str = "") -> str:
         p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"

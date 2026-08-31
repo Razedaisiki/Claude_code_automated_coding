@@ -43,7 +43,12 @@ class ClaudeCodeRuntime(CodingRuntime):
             prompt = "\n\n".join(parts)
             user = f"Task: {task.description}\nWorkspace: {self.root}\nFiles hint: {', '.join(task.files) if task.files else 'auto-detect'}\nUse tools to inspect and modify files as needed."
 
-            before = set(self.git.changed_files())
+            from agent_system.delivery import DeliveryConfig as _DC
+            _is_local = _DC.load(self.root).mode == "local"
+            if _is_local:
+                before = None
+            else:
+                before = set(self.git.changed_files())
             messages = [{"role": "user", "content": user}]
             result_text = ""
             for _ in range(6):
@@ -68,6 +73,8 @@ class ClaudeCodeRuntime(CodingRuntime):
             else:
                 result_text = "done (max turns)"
 
+            if before is None:
+                return AgentResult(status="SUCCESS", message=result_text[:800] if result_text else "done", artifacts=task.files or [])
             after = set(self.git.changed_files())
             changed = sorted(after - before)
             artifacts = [c for c in changed if ".agent/" not in c and "__pycache__" not in c and not c.endswith(".pyc")]

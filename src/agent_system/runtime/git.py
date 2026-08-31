@@ -25,18 +25,28 @@ class Git:
                 for l in to_add:
                     f.write(l + "\n")
 
+    def is_workspace_repo(self) -> bool:
+        return self._check_workspace_repo()
+
     def ensure_runtime_isolation(self):
+        if not self._check_workspace_repo():
+            return False
         self.ensure_runtime_excludes()
-        r = self.shell.run("git ls-files .agent 2>&1")
-        if r.stdout.strip():
-            print("Agent runtime files were tracked by Git. Removing .agent from the repository index.")
-            self.shell.run("git rm -r --cached --ignore-unmatch .agent 2>&1")
-            r2 = self.shell.run("git ls-files .agent 2>&1")
-            if r2.stdout.strip():
-                print(f"  Warning: still tracked: {r2.stdout.strip()[:80]}")
+        r = self.shell.run("git ls-files -- .agent")
+        if r.returncode != 0:
+            return False
+        tracked = r.stdout.strip()
+        if not tracked:
+            return True
+        print("Agent runtime files were tracked by Git. Removing .agent from the repository index.")
+        self.shell.run("git rm -r --cached --ignore-unmatch .agent")
+        r2 = self.shell.run("git ls-files -- .agent")
+        if r2.returncode == 0 and r2.stdout.strip():
+            print(f"  Warning: still tracked: {r2.stdout.strip()[:80]}")
+        return True
 
     def _check_workspace_repo(self) -> bool:
-        r = self.shell.run("git rev-parse --show-toplevel 2>&1")
+        r = self.shell.run("git rev-parse --show-toplevel")
         if r.returncode != 0:
             return False
         found = Path(r.stdout.strip()).resolve()
@@ -122,34 +132,34 @@ class Git:
             return ""
         if not self._guard():
             return ""
-        r = self.shell.run(f"git show --format= --find-renames {sha} 2>&1")
+        r = self.shell.run(f"git show --format= --find-renames {sha}")
         if r.stdout.strip():
-            return r.stdout
-        r2 = self.shell.run(f"git show {sha} 2>&1 | head -200")
-        return r2.stdout
+            return r.stdout + r.stderr
+        r2 = self.shell.run(f"git show {sha} | head -200")
+        return r2.stdout + r2.stderr
 
     def has_commits(self) -> bool:
         if not self._guard():
             return False
-        r = self.shell.run("git rev-parse HEAD 2>&1")
+        r = self.shell.run("git rev-parse HEAD")
         return r.returncode == 0
 
     def has_remote(self) -> bool:
         if not self._guard():
             return False
-        r = self.shell.run("git remote 2>&1")
+        r = self.shell.run("git remote")
         return bool(r.stdout.strip())
 
     def remote_url(self) -> str:
         if not self._guard():
             return ""
-        r = self.shell.run("git remote get-url origin 2>&1")
+        r = self.shell.run("git remote get-url origin")
         return r.stdout.strip() if r.returncode == 0 else ""
 
     def push(self) -> dict:
         if not self.has_remote():
             return {"status": "NO_REMOTE", "message": "no remote configured"}
-        r = self.shell.run("git push 2>&1")
+        r = self.shell.run("git push")
         out = r.stdout + r.stderr
         if r.returncode == 0:
             return {"status": "SUCCESS", "message": out.strip()}

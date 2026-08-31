@@ -26,8 +26,18 @@ class Supervisor:
         print("Supervisor started")
         from agent_system.runtime.git import Git
 
-        Git(self.root).ensure_runtime_isolation()
         git = Git(self.root)
+        from agent_system.delivery import DeliveryConfig
+
+        cfg = DeliveryConfig.load(self.root)
+        if cfg.mode == "gh" and not git.is_workspace_repo():
+            print("Cannot start workflow in gh mode: workspace is not an initialized Git repository.")
+            print(f"Expected Git root: {self.root.resolve()}")
+            print("Initialize Git in this project before running xxx (e.g. git init).")
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            return
+        git.ensure_runtime_isolation()
         raw_status = git.status()
         filtered = "\n".join(l for l in raw_status.splitlines() if ".agent/" not in l and "__pycache__" not in l)
         if filtered.strip():
