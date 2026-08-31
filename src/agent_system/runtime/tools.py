@@ -34,21 +34,33 @@ class ToolRuntime:
         self.fs = Filesystem(self.root)
         self.shell = Shell(self.root)
         self.git = Git(self.root)
+        self.events: list = []
 
     def handle(self, name: str, inp: dict) -> str:
         try:
             if name == "read_file":
-                return self.fs.read_file(inp["path"])
+                out = self.fs.read_file(inp["path"])
+                self.events.append({"tool": name, "input": dict(inp), "output": out[:4000], "exit_code": 0})
+                return out
             if name == "write_file":
                 self.fs.write_file(inp["path"], inp["content"])
-                return f"wrote {inp['path']}"
+                out = f"wrote {inp['path']}"
+                self.events.append({"tool": name, "input": {"path": inp["path"]}, "output": out, "exit_code": 0})
+                return out
             if name == "list_files":
                 pattern = inp.get("pattern", "**/*")
                 files = self.fs.list_files(pattern)
-                return "\n".join(files[:100]) if files else "(no files)"
+                out = "\n".join(files[:100]) if files else "(no files)"
+                self.events.append({"tool": name, "input": dict(inp), "output": out[:4000], "exit_code": 0})
+                return out
             if name == "run_command":
                 r = self.shell.run(inp["cmd"])
-                return (r.stdout + r.stderr)[:4000] or f"exit {r.returncode}"
+                out = (r.stdout + r.stderr)[:4000] or f"exit {r.returncode}"
+                self.events.append({"tool": name, "input": dict(inp), "output": out, "exit_code": r.returncode})
+                return out
         except Exception as e:
-            return f"error: {e}"
+            err = f"error: {e}"
+            self.events.append({"tool": name, "input": dict(inp), "output": err, "exit_code": 1})
+            return err
+        self.events.append({"tool": name, "input": dict(inp), "output": f"unknown tool {name}", "exit_code": 1})
         return f"unknown tool {name}"

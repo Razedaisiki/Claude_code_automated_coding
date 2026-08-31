@@ -20,12 +20,31 @@ class ClaudeCodeRuntime(CodingRuntime):
         self.tools = ToolRuntime(self.root)
         self.git = Git(self.root)
 
+    def _capture_baseline(self, task: AgentTask):
+        from agent_system.agents.models import FileSnapshot, TaskBaseline
+
+        files = {}
+        for rel in (task.files or []):
+            p = self.root / rel
+            if p.is_file():
+                try:
+                    content = p.read_text(encoding="utf-8")
+                    files[rel] = FileSnapshot(exists=True, content=content[:3000])
+                except Exception:
+                    files[rel] = FileSnapshot(exists=True)
+            else:
+                files[rel] = FileSnapshot(exists=False)
+        r = self.git.shell.run("git rev-parse HEAD")
+        sha = r.stdout.strip() if r.returncode == 0 else ""
+        return TaskBaseline(commit_sha=sha, files=files)
+
     def execute(self, task: AgentTask, context: ProjectContext) -> AgentResult:
         from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 
         api_key = resolve_api_key()
         if not api_key:
-            return AgentResult(status="SUCCESS", message=f"mock code for {task.description}", artifacts=task.files)
+            baseline = self._capture_baseline(task)
+            return AgentResult(status="SUCCESS", message=f"mock code for {task.description}", artifacts=task.files, baseline=baseline)
 
         try:
             import anthropic
@@ -45,6 +64,8 @@ class ClaudeCodeRuntime(CodingRuntime):
             val = "\n".join(f"- {v}" for v in (task.validation or [])) or "(none)"
             user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nWorkspace: {self.root}\nFiles hint: {', '.join(task.files) if task.files else 'auto-detect'}\nUse tools to inspect and modify files as needed."
 
+            baseline = self._capture_baseline(task)
+            self.tools.events = []
             from agent_system.delivery import DeliveryConfig as _DC
             _is_local = _DC.load(self.root).mode == "local"
             if _is_local:
@@ -53,6 +74,7 @@ class ClaudeCodeRuntime(CodingRuntime):
                 before = set(self.git.changed_files())
             messages = [{"role": "user", "content": user}]
             result_text = ""
+            hit_limit = False
             for _ in range(8):
                 resp = client.messages.create(
                     model=model,
@@ -74,12 +96,24 @@ class ClaudeCodeRuntime(CodingRuntime):
                 messages.append({"role": "user", "content": tool_results})
             else:
                 result_text = "done (max turns)"
+                hit_limit = True
+
+            from agent_system.agents.models import ExecutionEvidence, ToolEvent as _TE
+
+            events = [_TE(tool=e["tool"], input=e["input"], output=e["output"][:2000], exit_code=e["exit_code"]) for e in self.tools.events]
+            evidence = ExecutionEvidence(events=events)
+            if hit_limit:
+                after_chk = set(self.git.changed_files()) if before is not None else set()
+                has_change = bool(after_chk - before) if before is not None else False
+                if not has_change:
+                    return AgentResult(status="INCOMPLETE", message="execution budget exhausted without completing task", artifacts=[], baseline=baseline, evidence=evidence)
 
             if before is None:
-                return AgentResult(status="SUCCESS", message=result_text[:800] if result_text else "done", artifacts=task.files or [])
+                return AgentResult(status="SUCCESS", message=result_text[:800] if result_text else "done", artifacts=task.files or [], baseline=baseline, evidence=evidence)
             after = set(self.git.changed_files())
             changed = sorted(after - before)
             artifacts = [c for c in changed if ".agent/" not in c and "__pycache__" not in c and not c.endswith(".pyc")]
-            return AgentResult(status="SUCCESS", message=result_text[:800] if result_text else "done", artifacts=artifacts)
+            return AgentResult(status="SUCCESS", message=result_text[:800] if result_text else "done", artifacts=artifacts, baseline=baseline, evidence=evidence)
         except Exception as e:
-            return AgentResult(status="SUCCESS", message=f"mock code for {task.description} (fallback: {e:.60})", artifacts=task.files)
+            baseline_fb = self._capture_baseline(task) if hasattr(self, '_capture_baseline') else None
+            return AgentResult(status="SUCCESS", message=f"mock code for {task.description} (fallback: {e})", artifacts=task.files, baseline=baseline_fb)
