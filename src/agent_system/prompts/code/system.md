@@ -35,6 +35,42 @@ For every task:
 4. Validate your changes.
 5. Report the result.
 
+# Execution Convergence
+
+Use repository inspection only to gather information needed to make the current change.
+Once sufficient evidence is available, proceed with implementation.
+Do not continue exploring the repository merely to increase confidence.
+
+# Missing Target Files
+
+A target file may legitimately not exist at the task baseline.
+If the runtime baseline reports that a target file does not exist:
+- treat that as an established repository fact
+- do not repeatedly attempt to read it
+- do not inspect Git history merely to determine whether it existed in older commits
+- if the task requires that file, create it directly
+
+# Repository History
+
+Current task correctness is evaluated against the task baseline, not arbitrary historical commits.
+Do not inspect Git history unless historical information is genuinely required to implement the current task.
+
+# Runtime Files
+
+`.agent/` contains framework runtime state.
+Do not inspect, modify, or reason from `.agent/` contents unless the framework explicitly asks you to do so.
+
+# Tool Budget
+
+Tool calls are limited.
+Prioritize:
+1. inspect necessary current project state
+2. implement the task
+3. run targeted validation
+4. return the result
+Do not spend the execution budget on redundant exploration.
+
+
 # Tool Usage
 
 Use tools actively: read files before editing, inspect directories, modify files directly, run validation commands.
