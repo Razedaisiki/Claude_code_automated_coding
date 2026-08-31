@@ -4,7 +4,7 @@ from agent_system.agents.models import AgentResult
 from agent_system.agents.parent import ParentAgent
 from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 from agent_system.context import ProjectContext, load_context
-from agent_system.plan_parser import parse_plan
+from agent_system.plan_parser import load_plan, parse_plan, parse_plan_json, render_plan_md
 from agent_system.runtime.git import Git
 
 
@@ -44,6 +44,7 @@ class ClaudeParentAgent(ParentAgent):
         if ctx.milestones:
             print("  milestones loaded")
 
+        plan_json_file = self.root / ".agent" / "plan.json"
         plan_file = self.root / ".agent" / "plan.md"
         existing_plan = plan_file.read_text(encoding="utf-8") if plan_file.exists() else ""
         try:
@@ -55,13 +56,40 @@ class ClaudeParentAgent(ParentAgent):
         if _is_resume and existing_plan.strip():
             plan_text = existing_plan
             print("  plan.md reused (resume)")
+            plan_data, tasks = load_plan(self.root)
+            if not tasks:
+                tasks = parse_plan(plan_text)
         else:
-            plan_text = self._plan(ctx.task or task, ctx)
-            plan_file.parent.mkdir(parents=True, exist_ok=True)
-            plan_file.write_text(plan_text, encoding="utf-8")
-            print("  plan.md created")
+            raw = self._plan(ctx.task or task, ctx)
+            plan_data = None
+            try:
+                import json as _json
 
-        tasks = parse_plan(plan_text)
+                s = raw.find("{")
+                e = raw.rfind("}")
+                if s >= 0 and e > s:
+                    cand = _json.loads(raw[s:e+1])
+                    if isinstance(cand.get("tasks"), list):
+                        plan_data = cand
+            except Exception:
+                plan_data = None
+            if plan_data is not None:
+                plan_json_file.parent.mkdir(parents=True, exist_ok=True)
+                import json as _json2
+
+                plan_json_file.write_text(_json2.dumps(plan_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                plan_text = render_plan_md(plan_data)
+                plan_file.parent.mkdir(parents=True, exist_ok=True)
+                plan_file.write_text(plan_text, encoding="utf-8")
+                print("  plan.json created")
+                print("  plan.md rendered")
+                tasks = parse_plan_json(plan_data)
+            else:
+                plan_text = raw
+                plan_file.parent.mkdir(parents=True, exist_ok=True)
+                plan_file.write_text(plan_text, encoding="utf-8")
+                print("  plan.md created")
+                tasks = parse_plan(plan_text)
         if tasks:
             print(f"  parsed {len(tasks)} tasks from plan")
             for t in tasks:

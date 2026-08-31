@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -16,6 +17,7 @@ class ProjectContext:
     milestones: List[Milestone]
     plan: str
     repository: str
+    plan_data: Optional[dict] = field(default=None)
 
     @property
     def claude_md(self) -> str:
@@ -39,6 +41,17 @@ def load_context(root: Path = None) -> ProjectContext:
     task = read(root / "TASK.md")
     instructions = read(root / "CLAUDE.md")
     plan = read(root / ".agent" / "plan.md")
+    plan_data: Optional[dict] = None
+    jpath = root / ".agent" / "plan.json"
+    if jpath.exists():
+        try:
+            plan_data = json.loads(jpath.read_text(encoding="utf-8"))
+            if plan_data and not plan:
+                from agent_system.plan_parser import render_plan_md
+
+                plan = render_plan_md(plan_data)
+        except Exception:
+            plan_data = None
 
     milestones: List[Milestone] = []
     milestones_dir = root / ".agent" / "milestones"
@@ -58,4 +71,5 @@ def load_context(root: Path = None) -> ProjectContext:
         milestones=milestones,
         plan=plan,
         repository=repository,
+        plan_data=plan_data,
     )

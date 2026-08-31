@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 from typing import List, Tuple
@@ -19,7 +20,93 @@ def classify(desc: str) -> Tuple[TaskType, bool]:
     return "implementation", True
 
 
+def _norm_str_list(v) -> List[str]:
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, str) and v.strip():
+        return [v.strip()]
+    return []
+
+
+def parse_plan_json(data: dict) -> List[AgentTask]:
+    tasks_raw = data.get("tasks", []) if isinstance(data, dict) else []
+    tasks: List[AgentTask] = []
+    for idx, t in enumerate(tasks_raw):
+        if not isinstance(t, dict):
+            continue
+        tid = str(t.get("id", f"task{idx+1:03d}")).strip().lower() or f"task{idx+1:03d}"
+        desc = str(t.get("description", "")).strip()
+        if not desc:
+            continue
+        ttype = str(t.get("type", "implementation")).strip().lower()
+        if ttype not in ("implementation", "verification", "optional"):
+            ttype, _ = classify(desc)
+        role = str(t.get("role", "")).strip().lower()
+        if role not in ("code", "test"):
+            role = "test" if re.search(r"\btest\b", desc, re.IGNORECASE) else "code"
+        files = _norm_str_list(t.get("files", []))
+        acceptance = _norm_str_list(t.get("acceptance", []))
+        validation = _norm_str_list(t.get("validation", []))
+        required = bool(t.get("required", True)) if ttype != "optional" else False
+        tasks.append(AgentTask(id=tid, role=role, description=desc, files=files, type=ttype, required=required, acceptance=acceptance, validation=validation))
+    return tasks
+
+
+def _extract_json(text: str) -> dict | None:
+    s = text.find("{")
+    e = text.rfind("}")
+    if s >= 0 and e > s:
+        try:
+            return json.loads(text[s:e+1])
+        except Exception:
+            return None
+    return None
+
+
+def render_plan_md(data: dict) -> str:
+    objective = str(data.get("objective", "")).strip()
+    analysis = str(data.get("analysis", "")).strip()
+    risks = _norm_str_list(data.get("risks", []))
+    tasks_raw = data.get("tasks", [])
+    lines = []
+    lines.append(f"# Objective\n\n{objective or '(none)'}\n")
+    if analysis:
+        lines.append(f"# Analysis\n\n{analysis}\n")
+    lines.append("# Tasks\n")
+    for t in tasks_raw:
+        if not isinstance(t, dict):
+            continue
+        tid = str(t.get("id", "")).strip()
+        ttype = str(t.get("type", "implementation")).strip()
+        desc = str(t.get("description", "")).strip()
+        acc = _norm_str_list(t.get("acceptance", []))
+        val = _norm_str_list(t.get("validation", []))
+        lines.append(f"ID: {tid}")
+        lines.append(f"Type: {ttype}")
+        lines.append(f"Description: {desc}")
+        if acc:
+            lines.append("Acceptance Criteria:")
+            for a in acc:
+                lines.append(f"- {a}")
+        if val:
+            lines.append("Validation:")
+            for v in val:
+                lines.append(f"- {v}")
+        lines.append("")
+    if risks:
+        lines.append("# Risks\n")
+        for r in risks:
+            lines.append(f"- {r}")
+    return "\n".join(lines) + "\n"
+
+
 def parse_plan(plan_text: str) -> List[AgentTask]:
+    j = _extract_json(plan_text)
+    if j is not None and isinstance(j.get("tasks"), list) and j["tasks"]:
+        parsed = parse_plan_json(j)
+        if parsed:
+            return parsed
+
     tasks: List[AgentTask] = []
     idx = 0
 
@@ -111,5 +198,35 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
     return tasks
 
 
+def load_plan(root: Path = None) -> tuple[dict | None, List[AgentTask]]:
+    root = root or Path.cwd()
+    jpath = root / ".agent" / "plan.json"
+    mpath = root / ".agent" / "plan.md"
+    if jpath.exists():
+        try:
+            data = json.loads(jpath.read_text(encoding="utf-8"))
+            tasks = parse_plan_json(data)
+            if tasks:
+                return data, tasks
+        except Exception:
+            pass
+    if mpath.exists():
+        try:
+            text = mpath.read_text(encoding="utf-8")
+            return None, parse_plan(text)
+        except Exception:
+            pass
+    return None, []
+
+
 def parse_plan_file(path: Path) -> List[AgentTask]:
-    return parse_plan(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        try:
+            data = json.loads(text)
+            tasks = parse_plan_json(data)
+            if tasks:
+                return tasks
+        except Exception:
+            pass
+    return parse_plan(text)

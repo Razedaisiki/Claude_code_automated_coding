@@ -12,7 +12,7 @@ def init_workspace(root: Path = None):
     prompts_dir.mkdir(parents=True, exist_ok=True)
     milestones_dir.mkdir(parents=True, exist_ok=True)
 
-    state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.2"}
+    state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.3"}
     (agent_dir / "state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
     cfg = agent_dir / "config.yaml"
@@ -23,13 +23,16 @@ def init_workspace(root: Path = None):
                 if not text.endswith("\n"):
                     f.write("\n")
                 f.write("delivery:\n  mode: local\n")
-                f.write("prompt_version: v0.2\n" if "prompt_version" not in text else "")
+                f.write("prompt_version: v0.3\n" if "prompt_version" not in text else "")
         elif "prompt_version" not in text:
             with cfg.open("a", encoding="utf-8") as f:
-                f.write("prompt_version: v0.2\n")
+                f.write("prompt_version: v0.3\n")
+        else:
+            if "v0.2" in text:
+                cfg.write_text(text.replace("v0.2", "v0.3"), encoding="utf-8")
     else:
         cfg.write_text(
-            "version: 0.1.0\nmodel: mock\nprompt_version: v0.2\ndelivery:\n  mode: local\n",
+            "version: 0.1.0\nmodel: mock\nprompt_version: v0.3\ndelivery:\n  mode: local\n",
             encoding="utf-8",
         )
 
