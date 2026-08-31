@@ -75,7 +75,7 @@ class ClaudeCodeRuntime(CodingRuntime):
             messages = [{"role": "user", "content": user}]
             result_text = ""
             hit_limit = False
-            for _ in range(8):
+            for _ in range(12):
                 resp = client.messages.create(
                     model=model,
                     max_tokens=4096,
