@@ -58,6 +58,9 @@ class ExecutionEvidence:
     validation: List[ToolEvent] = field(default_factory=list)
 
 
+AgentExecutionStatus = Literal["COMPLETED", "BUDGET_STOPPED", "ERROR"]
+
+
 @dataclass
 class AgentResult:
     status: Literal["SUCCESS", "FAILED", "INCOMPLETE"]
@@ -68,3 +71,5 @@ class AgentResult:
     outcome: Optional[TaskOutcome] = None
     evidence: Optional[ExecutionEvidence] = None
     baseline: Optional[TaskBaseline] = None
+    execution_status: AgentExecutionStatus = "COMPLETED"
+    stop_reason: Optional[str] = None

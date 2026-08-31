@@ -321,23 +321,20 @@ class ClaudeParentAgent(ParentAgent):
         out.write_text(content if content.lstrip().startswith("#") else f"# Milestone {next_id:03d}\n\n{content}", encoding="utf-8")
         return str(out)
 
-    def _quick_baseline_check(self, task, baseline, diff: str) -> bool:
+    def _quick_baseline_check(self, task, baseline, diff: str) -> dict | None:
         if not baseline or not baseline.files or not task.files:
-            return False
+            return None
         try:
-            # If all tracked task files were absent at baseline and diff is only additions, treat as coherent new-file delivery
             all_new = all(not snap.exists for snap in baseline.files.values())
             if not all_new:
-                return False
-            # Require at least one of the task files appears in diff
+                return None
             if not any(rel in diff for rel in task.files):
-                return False
-            # Guard against empty or trivial diff
+                return None
             if len(diff.strip()) < 50:
-                return False
-            return True
+                return None
+            return {"preservation_risk": False, "reason": "all task files were absent at baseline; new-file preservation concern does not apply"}
         except Exception:
-            return False
+            return None
 
     def _format_baseline(self, baseline) -> str:
         if not baseline:
@@ -361,10 +358,12 @@ class ClaudeParentAgent(ParentAgent):
         return "\n".join(lines)
 
     def _review(self, task, result: AgentResult, diff_before: str = "", diff_after: str = "") -> AgentResult:
+        if getattr(result, 'execution_status', 'COMPLETED') == "ERROR" or result.status == "FAILED":
+            if getattr(result, 'execution_status', None) == "ERROR":
+                return AgentResult(status="FAILED", message=f"task {task.id} runtime error: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None), execution_status="ERROR", stop_reason=getattr(result, 'stop_reason', None))
+            return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         if result.status == "INCOMPLETE":
             return AgentResult(status="FAILED", message=f"task {task.id} incomplete: execution budget exhausted without producing expected changes", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-        if result.status == "FAILED":
-            return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         if not result.message:
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
         if task.type == "verification":
@@ -395,12 +394,10 @@ class ClaudeParentAgent(ParentAgent):
         evidence_obj = getattr(result, 'evidence', None)
         baseline_text = self._format_baseline(baseline_obj)
         evidence_text = self._format_evidence(evidence_obj)
-        # Quick deterministic pass: single new file at baseline not-exist + correct content satisfies this class of task
-        if self._quick_baseline_check(task, baseline_obj, diff):
-            print(f"    baseline check: new file at absent baseline — fast APPROVED")
-            cm = self._commit_message(task, diff)
-            from agent_system.agents.models import TaskOutcome as _TOQ
-            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (baseline check)", artifacts=result.artifacts, commit_message=cm, outcome=_TOQ(task_id=task.id, status="CHANGED", decision="APPROVED"), baseline=baseline_obj, evidence=evidence_obj)
+        quick = self._quick_baseline_check(task, baseline_obj, diff)
+        if quick is not None:
+            print(f"    baseline advisory: {quick['reason']}")
+            baseline_text += f"\nAdvisory: {quick['reason']}"
         score = self._llm_review(task, result, diff, ctx, baseline_text=baseline_text, evidence_text=evidence_text)
         if score is not None and not score.get("pass", True):
             return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts, baseline=baseline_obj, evidence=evidence_obj)

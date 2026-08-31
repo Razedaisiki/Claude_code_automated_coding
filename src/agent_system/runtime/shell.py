@@ -17,12 +17,18 @@ class Shell:
         self.timeout = timeout
 
     def run(self, cmd: str, timeout: Optional[int] = None) -> ShellResult:
-        proc = subprocess.run(
-            cmd,
-            shell=True,
-            cwd=str(self.root),
-            capture_output=True,
-            text=True,
-            timeout=timeout or self.timeout,
-        )
-        return ShellResult(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+        try:
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=str(self.root),
+                capture_output=True,
+                text=True,
+                timeout=timeout or self.timeout,
+            )
+            return ShellResult(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+        except subprocess.TimeoutExpired as exc:
+            out = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            stderr = (err + f"\nCommand timed out after {timeout or self.timeout}s").strip()
+            return ShellResult(returncode=124, stdout=out, stderr=stderr)
