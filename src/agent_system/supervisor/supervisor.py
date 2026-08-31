@@ -5,6 +5,13 @@ from agent_system.supervisor.state import StateManager
 
 
 def _default_parent(root: Path):
+    from agent_system.config import resolve_api_key
+
+    api_key = resolve_api_key()
+    if not api_key:
+        from agent_system.agents.mock_parent import MockParent
+
+        return MockParent()
     try:
         from agent_system.agents.claude_parent import ClaudeParentAgent
 

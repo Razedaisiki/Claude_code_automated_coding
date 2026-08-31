@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 
 @dataclass
@@ -17,7 +17,7 @@ class ProjectContext:
     milestones: List[Milestone]
     plan: str
     repository: str
-    plan_data: Optional[dict] = field(default=None)
+    plan_data: dict = field(default=None)
 
     @property
     def claude_md(self) -> str:
@@ -41,7 +41,7 @@ def load_context(root: Path = None) -> ProjectContext:
     task = read(root / "TASK.md")
     instructions = read(root / "CLAUDE.md")
     plan = read(root / ".agent" / "plan.md")
-    plan_data: Optional[dict] = None
+    plan_data = None
     jpath = root / ".agent" / "plan.json"
     if jpath.exists():
         try:

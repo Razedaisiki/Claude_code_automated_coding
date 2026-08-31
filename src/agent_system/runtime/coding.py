@@ -53,7 +53,7 @@ class ClaudeCodeRuntime(CodingRuntime):
                 before = set(self.git.changed_files())
             messages = [{"role": "user", "content": user}]
             result_text = ""
-            for _ in range(6):
+            for _ in range(8):
                 resp = client.messages.create(
                     model=model,
                     max_tokens=4096,

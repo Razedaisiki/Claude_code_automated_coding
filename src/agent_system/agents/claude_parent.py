@@ -141,9 +141,10 @@ class ClaudeParentAgent(ParentAgent):
                     if review.status == "SUCCESS":
                         if getattr(review, "outcome", None) and review.outcome.status == "SATISFIED":
                             print(f"  Review SATISFIED for {t.id} (attempt {attempt}): {review.message}")
+                            from agent_system.delivery import DeliveryConfig as _DC_SAT
                             from agent_system.supervisor.state import StateManager as _SM_SAT
 
-                            _SM_SAT(self.root).update(status="RUNNING", delivery={"mode": DeliveryConfig.load(self.root).mode, "task_id": t.id, "task_index": task_index, "commit_sha": None, "outcome": "SATISFIED"})
+                            _SM_SAT(self.root).update(status="RUNNING", delivery={"mode": _DC_SAT.load(self.root).mode, "task_id": t.id, "task_index": task_index, "commit_sha": None, "outcome": "SATISFIED"})
                             break
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
                         if t.type == "implementation" and review.commit_message:
@@ -359,7 +360,7 @@ class ClaudeParentAgent(ParentAgent):
 
         return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm, outcome=_TO2(task_id=task.id, status="CHANGED", decision="APPROVED"))
 
-    def _satisfaction_review(self, task, result) -> dict | None:
+    def _satisfaction_review(self, task, result):
         try:
             import anthropic, json
 
@@ -470,20 +471,61 @@ class ClaudeParentAgent(ParentAgent):
         return None
 
     def _plan(self, task: str, ctx: ProjectContext) -> str:
-        system = _load_prompt("parent")
+        base = Path(__file__).parent.parent / "prompts"
+        planning_path = base / "parent" / "planning.md"
+        system = planning_path.read_text(encoding="utf-8") if planning_path.exists() else _load_prompt("parent")
+        if (base / "common" / "engineering_rules.md").exists():
+            system = system + "\n\n" + (base / "common" / "engineering_rules.md").read_text(encoding="utf-8")
         milestones_text = "\n\n".join(f"## {m.name}\n{m.content}" for m in ctx.milestones)
         user = f"Task:\n{task}\n\nRepo: {ctx.repository}\n\nCLAUDE.md:\n{ctx.instructions[:2000]}\n\nMilestones:\n{milestones_text[:2000]}"
         invoked = self._invoke(system, user)
         if invoked and not invoked.startswith("mock result"):
-            return invoked if invoked.lstrip().startswith("#") else f"# Plan\n\n{invoked}\n"
-        first_line = task.strip().splitlines()[0] if task.strip() else "No task"
-        return (
-            f"# Objective\n{first_line}\n\n"
-            f"# Analysis\nTask: {task.strip()[:500]}\nRepo: {ctx.repository or 'unknown'}\n\n"
-            f"# Tasks\n1. Implement feature\n2. Add tests\n\n"
-            f"# Execution Order\n1. Implement\n2. Test\n\n"
-            f"# Validation\nRun demo workflow and verify output.\n"
-        )
+            s = invoked.find("{")
+            e = invoked.rfind("}")
+            if s >= 0 and e > s:
+                try:
+                    import json as _pj
+
+                    cand = _pj.loads(invoked[s:e+1])
+                    if isinstance(cand.get("tasks"), list):
+                        return invoked
+                except Exception:
+                    pass
+            if "task001" in invoked.lower() or '"tasks"' in invoked or '"description"' in invoked:
+                return invoked
+            # LLM returned non-JSON despite contract — fall through to structured fallback
+            print("  [plan: non-JSON response, using structured fallback]")
+        def _first_meaningful_line(t: str) -> str:
+            for line in t.splitlines():
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                return s[:300]
+            return "Implement feature"
+        first_meaningful = _first_meaningful_line(task)
+        import json as _jf
+
+        # Try to derive files from task text
+        import re as _re2
+
+        _files_hint = _re2.findall(r"[\w./-]+\.py", task)
+        fallback = {
+            "objective": first_meaningful,
+            "analysis": f"Task: {task.strip()[:500]} Repo: {ctx.repository or 'unknown'}",
+            "tasks": [
+                {
+                    "id": "task001",
+                    "role": "code",
+                    "type": "implementation",
+                    "description": first_meaningful,
+                    "acceptance": ["Repository satisfies the task requirements", "Existing tests pass"],
+                    "validation": ["Run existing test suite"],
+                    "files": _files_hint[:3],
+                }
+            ],
+            "risks": [],
+        }
+        return _jf.dumps(fallback, ensure_ascii=False)
 
     def _execute(self, plan: str, ctx: ProjectContext):
         print("  execute phase")

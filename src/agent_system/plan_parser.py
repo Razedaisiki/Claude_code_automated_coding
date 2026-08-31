@@ -52,7 +52,7 @@ def parse_plan_json(data: dict) -> List[AgentTask]:
     return tasks
 
 
-def _extract_json(text: str) -> dict | None:
+def _extract_json(text: str):
     s = text.find("{")
     e = text.rfind("}")
     if s >= 0 and e > s:
@@ -198,7 +198,7 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
     return tasks
 
 
-def load_plan(root: Path = None) -> tuple[dict | None, List[AgentTask]]:
+def load_plan(root: Path = None):
     root = root or Path.cwd()
     jpath = root / ".agent" / "plan.json"
     mpath = root / ".agent" / "plan.md"
