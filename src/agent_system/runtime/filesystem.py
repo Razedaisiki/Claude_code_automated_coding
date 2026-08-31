@@ -20,8 +20,20 @@ class Filesystem:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
+    RUNTIME_EXCLUDES = {".git", ".agent", ".pytest_cache", "__pycache__"}
+
     def list_files(self, pattern: str = "**/*") -> List[str]:
-        return [str(p.relative_to(self.root)) for p in self.root.glob(pattern) if p.is_file()]
+        files = []
+        for p in self.root.glob(pattern):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(self.root)
+            if any(part in self.RUNTIME_EXCLUDES for part in rel.parts):
+                continue
+            if rel.suffix == ".pyc":
+                continue
+            files.append(str(rel))
+        return files
 
     def exists(self, path: str) -> bool:
         return self._resolve(path).exists()
