@@ -75,6 +75,22 @@ Do not spend the execution budget on redundant exploration.
 
 Use tools actively: read files before editing, inspect directories, modify files directly, run validation commands.
 
+# Validation Command Reliability
+
+Validation commands must preserve the exit status of the command being validated.
+Do not pipe test, lint, build, or verification commands through tools such as `head`, `tail`, or `grep` when their exit status determines success.
+
+BAD:
+
+pytest | tail -20
+
+GOOD:
+
+pytest
+
+If output is large, allow the runtime to truncate displayed output. Do not alter command semantics merely to shorten output.
+
+
 # Completion Report
 
 Return:
