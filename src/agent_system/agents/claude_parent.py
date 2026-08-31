@@ -321,9 +321,32 @@ class ClaudeParentAgent(ParentAgent):
         out.write_text(content if content.lstrip().startswith("#") else f"# Milestone {next_id:03d}\n\n{content}", encoding="utf-8")
         return str(out)
 
+    def _format_baseline(self, baseline) -> str:
+        if not baseline:
+            return "(no baseline captured)"
+        lines = [f"HEAD: {baseline.commit_sha[:7] if baseline.commit_sha else '(none)'}"]
+        for rel, snap in (baseline.files or {}).items():
+            if snap.exists:
+                lines.append(f"{rel}: exists (baseline)")
+            else:
+                lines.append(f"{rel}: did not exist at task baseline (new file is expected)")
+        if not baseline.files:
+            lines.append("(no task files tracked)")
+        return "\n".join(lines)
+
+    def _format_evidence(self, evidence) -> str:
+        if not evidence or not evidence.events:
+            return "(no tool evidence)"
+        lines = []
+        for ev in evidence.events[-20:]:
+            lines.append(f"{ev.tool} {ev.input} -> exit {ev.exit_code}: {ev.output[:400]}")
+        return "\n".join(lines)
+
     def _review(self, task, result: AgentResult, diff_before: str = "", diff_after: str = "") -> AgentResult:
+        if result.status == "INCOMPLETE":
+            return AgentResult(status="FAILED", message=f"task {task.id} incomplete: execution budget exhausted without producing expected changes", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         if result.status == "FAILED":
-            return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts)
+            return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         if not result.message:
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
         if task.type == "verification":
@@ -342,23 +365,25 @@ class ClaudeParentAgent(ParentAgent):
                 if sat.get("decision") == "ALREADY_SATISFIED":
                     from agent_system.agents.models import TaskOutcome
 
-                    return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=result.artifacts, outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])))
+                    return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=result.artifacts, outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])), baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
                 if sat.get("decision") == "CHANGES_REQUIRED":
-                    return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=result.artifacts)
+                    return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
             from agent_system.delivery import DeliveryConfig as _DC2
             if _DC2.load(self.root).mode == "local":
                 return self._review_local_no_diff(task, result)
             return AgentResult(status="FAILED", message=f"task {task.id} produced no project changes", artifacts=result.artifacts)
         ctx = load_context(self.root)
-        score = self._llm_review(task, result, diff, ctx)
+        baseline_text = self._format_baseline(getattr(result, 'baseline', None))
+        evidence_text = self._format_evidence(getattr(result, 'evidence', None))
+        score = self._llm_review(task, result, diff, ctx, baseline_text=baseline_text, evidence_text=evidence_text)
         if score is not None and not score.get("pass", True):
-            return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts)
+            return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         if diff.strip():
             print(f"    diff: {diff[:200]}")
         cm = self._commit_message(task, diff)
         from agent_system.agents.models import TaskOutcome as _TO2
 
-        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm, outcome=_TO2(task_id=task.id, status="CHANGED", decision="APPROVED"))
+        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm, outcome=_TO2(task_id=task.id, status="CHANGED", decision="APPROVED"), baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
 
     def _satisfaction_review(self, task, result):
         try:
@@ -376,17 +401,21 @@ class ClaudeParentAgent(ParentAgent):
             ctx = load_context(self.root)
             import pathlib
 
-            evidence = ""
+            baseline_text = self._format_baseline(getattr(result, 'baseline', None))
+            evidence_text = self._format_evidence(getattr(result, 'evidence', None))
+            repo_evidence = ""
             for rel in (task.files or []):
                 pp = self.root / rel
                 if pp.is_file():
                     try:
-                        evidence += f"\n--- {rel} ---\n{pp.read_text(encoding='utf-8')[:3000]}\n"
+                        repo_evidence += f"\n--- {rel} ---\n{pp.read_text(encoding='utf-8')[:2000]}\n"
                     except Exception:
-                        evidence += f"\n--- {rel} --- (unreadable)\n"
+                        repo_evidence += f"\n--- {rel} --- (unreadable)\n"
+                else:
+                    repo_evidence += f"\n--- {rel} --- (not found)\n"
             if task.acceptance:
-                evidence += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in task.acceptance)
-            user = f"Task: {task.description}\nRepo evidence:\n{evidence[:4000]}\nPlan excerpt: {ctx.plan[:1500]}\nResult: {result.message[:500]}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
+                repo_evidence += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in task.acceptance)
+            user = f"Task: {task.description}\nBaseline:\n{baseline_text}\nRepo evidence:\n{repo_evidence[:3000]}\nTool evidence:\n{evidence_text[:2000]}\nPlan excerpt: {ctx.plan[:1500]}\nResult: {result.message[:500]}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
             resp = client.messages.create(model=self.model or "claude-sonnet-4-20250514", max_tokens=512, system=system, messages=[{"role": "user", "content": user}])
             text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
             s = text.find("{")
@@ -434,7 +463,7 @@ class ClaudeParentAgent(ParentAgent):
     def _commit_message(self, task, diff: str) -> str:
         return self.generate_commit_message(diff, hint=task.description)
 
-    def _llm_review(self, task, result: AgentResult, diff: str, ctx: ProjectContext):
+    def _llm_review(self, task, result: AgentResult, diff: str, ctx: ProjectContext, baseline_text: str = "", evidence_text: str = ""):
         try:
             import anthropic, json
 
@@ -447,7 +476,9 @@ class ClaudeParentAgent(ParentAgent):
             system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer. Reply JSON only: {\"decision\": \"APPROVED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
             val = "\n".join(f"- {v}" for v in (task.validation or [])) or "(none)"
             acc = "\n".join(f"- {a}" for a in (task.acceptance or [])) or "(none)"
-            user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
+            baseline_text = baseline_text or self._format_baseline(getattr(result, 'baseline', None))
+            evidence_text = evidence_text or self._format_evidence(getattr(result, 'evidence', None))
+            user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nBaseline:\n{baseline_text}\nEvidence:\n{evidence_text[:3000]}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
             resp = client.messages.create(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=512,
