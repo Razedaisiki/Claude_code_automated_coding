@@ -443,8 +443,10 @@ class ClaudeParentAgent(ParentAgent):
             base_url = resolve_base_url()
             client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=15) if base_url else anthropic.Anthropic(api_key=api_key, timeout=15)
             p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
-            system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer. Reply JSON only: {\"pass\": bool, \"reason\": string}"
-            user = f"Task: {task.description}\nAcceptance: {task.acceptance}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
+            system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer. Reply JSON only: {\"decision\": \"APPROVED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
+            val = "\n".join(f"- {v}" for v in (task.validation or [])) or "(none)"
+            acc = "\n".join(f"- {a}" for a in (task.acceptance or [])) or "(none)"
+            user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
             resp = client.messages.create(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=512,
@@ -455,7 +457,14 @@ class ClaudeParentAgent(ParentAgent):
             start = text.find("{")
             end = text.rfind("}") + 1
             if start >= 0 and end > start:
-                return json.loads(text[start:end])
+                data = json.loads(text[start:end])
+                dec = str(data.get("decision", "")).upper()
+                if dec in ("APPROVED", "ALREADY_SATISFIED", "SATISFIED"):
+                    return {"pass": True, "reason": data.get("reason", ""), "decision": dec}
+                if dec in ("CHANGES_REQUIRED", "REJECTED", "FAILED"):
+                    return {"pass": False, "reason": data.get("reason", text[:500]), "correction": data.get("correction", ""), "decision": dec}
+                if "pass" in data:
+                    return data
         except Exception:
             return None
         return None
