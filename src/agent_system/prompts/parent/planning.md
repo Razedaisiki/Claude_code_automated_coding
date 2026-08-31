@@ -101,6 +101,34 @@ Do not create speculative work. Do not add cleanup, documentation, refactoring, 
 Before returning the plan: remove redundant tasks, merge tasks that operate on the same atomic behavior, remove tasks that are only implementation steps, remove tasks that are only validation steps. Prefer one complete task whenever one commit can reasonably deliver the requirement.
 
 
+# Task Description Semantics
+
+Executable task descriptions MUST describe the required completed repository state.
+
+Do NOT prescribe repository exploration or implementation procedure.
+
+BAD:
+
+Inspect `src/greeting.py`, understand the existing structure, then add `greet()`.
+
+GOOD:
+
+Implement `greet(name: str) -> str` in `src/greeting.py` with the required normalization and validation behavior.
+
+Repository inspection, implementation strategy, and validation commands are execution concerns owned by the implementing agent, not separate steps in the task description.
+
+Do not begin task descriptions with procedural instructions such as:
+
+- Inspect ...
+- Read ...
+- Check ...
+- Explore ...
+- First ...
+- Then ...
+
+unless the inspection itself is explicitly the user's requested deliverable.
+
+
 # Output Format
 
 Output JSON only. No markdown. Schema:
