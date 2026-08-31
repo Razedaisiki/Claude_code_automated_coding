@@ -131,7 +131,7 @@ class ClaudeParentAgent(ParentAgent):
                     diff_before = self.git.diff()
                     if t.role == "code":
                         if attempt > 1:
-                            t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files)
+                            t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files, type=t.type, required=t.required, acceptance=t.acceptance, validation=t.validation)
                         result = CodeAgent(root=self.root, model=self.model).execute(t)
                     else:
                         result = MockTestAgent().execute(t)
@@ -139,6 +139,12 @@ class ClaudeParentAgent(ParentAgent):
                     diff_after = self.git.diff()
                     review = self._review(t, result, diff_before, diff_after)
                     if review.status == "SUCCESS":
+                        if getattr(review, "outcome", None) and review.outcome.status == "SATISFIED":
+                            print(f"  Review SATISFIED for {t.id} (attempt {attempt}): {review.message}")
+                            from agent_system.supervisor.state import StateManager as _SM_SAT
+
+                            _SM_SAT(self.root).update(status="RUNNING", delivery={"mode": DeliveryConfig.load(self.root).mode, "task_id": t.id, "task_index": task_index, "commit_sha": None, "outcome": "SATISFIED"})
+                            break
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
                         if t.type == "implementation" and review.commit_message:
                             from agent_system.delivery import DeliveryConfig
@@ -183,7 +189,7 @@ class ClaudeParentAgent(ParentAgent):
                                         StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": task_index})
                                         correction = ci_decision.get("correction", "")[:500]
                                         print(f"  CI correction needed: {correction[:80]}")
-                                        t = AgentTask(id=t.id, role=t.role, description=correction or t.description, files=t.files)
+                                        t = AgentTask(id=t.id, role=t.role, description=correction or t.description, files=t.files, type=t.type, required=t.required, acceptance=t.acceptance, validation=t.validation)
                                         last_reason = ci_decision["reason"]
                                         continue
                                     else:
@@ -204,11 +210,16 @@ class ClaudeParentAgent(ParentAgent):
                                 elif dres.push_status == "SKIPPED":
                                     print("  Local delivery: committed")
                         break
-                    cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-                    if cur_diff.strip() == last_diff.strip() and attempt > 1:
-                        print(f"  No new changes (same diff), stopping retry for {t.id}")
-                        return review
-                    last_diff = cur_diff
+                    if review.status == "FAILED" and "already satisfied" not in review.message.lower() and "not yet satisfied" not in review.message.lower():
+                        cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
+                        if cur_diff.strip() == last_diff.strip() and attempt > 1:
+                            print(f"  No new changes (same diff), stopping retry for {t.id}")
+                            return review
+                        last_diff = cur_diff
+                    else:
+                        raw_cur = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
+                        filtered_cur = "\n".join(l for l in raw_cur.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l).strip()
+                        last_diff = filtered_cur
                     last_reason = review.message
                     print(f"  Review FAILED for {t.id} (attempt {attempt}): {review.message}")
                     if attempt == 3:
@@ -320,12 +331,20 @@ class ClaudeParentAgent(ParentAgent):
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (optional)", artifacts=result.artifacts)
         if task.role != "code":
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
-        from agent_system.delivery import DeliveryConfig as _DC2
 
         raw_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
         filtered = "\n".join(l for l in raw_diff.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l)
         diff = filtered.strip()
         if not diff:
+            sat = self._satisfaction_review(task, result)
+            if sat is not None:
+                if sat.get("decision") == "ALREADY_SATISFIED":
+                    from agent_system.agents.models import TaskOutcome
+
+                    return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=result.artifacts, outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])))
+                if sat.get("decision") == "CHANGES_REQUIRED":
+                    return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=result.artifacts)
+            from agent_system.delivery import DeliveryConfig as _DC2
             if _DC2.load(self.root).mode == "local":
                 return self._review_local_no_diff(task, result)
             return AgentResult(status="FAILED", message=f"task {task.id} produced no project changes", artifacts=result.artifacts)
@@ -336,7 +355,51 @@ class ClaudeParentAgent(ParentAgent):
         if diff.strip():
             print(f"    diff: {diff[:200]}")
         cm = self._commit_message(task, diff)
-        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm)
+        from agent_system.agents.models import TaskOutcome as _TO2
+
+        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm, outcome=_TO2(task_id=task.id, status="CHANGED", decision="APPROVED"))
+
+    def _satisfaction_review(self, task, result) -> dict | None:
+        try:
+            import anthropic, json
+
+            from agent_system.config import resolve_api_key, resolve_base_url
+
+            api_key = resolve_api_key()
+            if not api_key:
+                return None
+            base_url = resolve_base_url()
+            client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=15) if base_url else anthropic.Anthropic(api_key=api_key, timeout=15)
+            p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+            system = p.read_text(encoding="utf-8") if p.exists() else "You are a reviewer. Decide if the repository already satisfies the task. Return JSON: {\"decision\": \"ALREADY_SATISFIED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
+            ctx = load_context(self.root)
+            import pathlib
+
+            evidence = ""
+            for rel in (task.files or []):
+                pp = self.root / rel
+                if pp.is_file():
+                    try:
+                        evidence += f"\n--- {rel} ---\n{pp.read_text(encoding='utf-8')[:3000]}\n"
+                    except Exception:
+                        evidence += f"\n--- {rel} --- (unreadable)\n"
+            if task.acceptance:
+                evidence += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in task.acceptance)
+            user = f"Task: {task.description}\nRepo evidence:\n{evidence[:4000]}\nPlan excerpt: {ctx.plan[:1500]}\nResult: {result.message[:500]}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
+            resp = client.messages.create(model=self.model or "claude-sonnet-4-20250514", max_tokens=512, system=system, messages=[{"role": "user", "content": user}])
+            text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+            s = text.find("{")
+            e = text.rfind("}") + 1
+            if s >= 0 and e > s:
+                data = json.loads(text[s:e])
+                dec = data.get("decision", "")
+                if dec in ("ALREADY_SATISFIED", "SATISFIED", "APPROVED", "NO_CHANGE"):
+                    return {"decision": "ALREADY_SATISFIED", "reason": data.get("reason", text[:500]), "evidence": data.get("evidence", [])}
+                if dec in ("CHANGES_REQUIRED", "REQUIRED"):
+                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:500]), "correction": data.get("correction", "")}
+        except Exception:
+            return None
+        return None
 
     def _review_local_no_diff(self, task, result) -> "AgentResult":
         from agent_system.agents.models import AgentResult as _AR
