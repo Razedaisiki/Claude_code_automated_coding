@@ -60,6 +60,8 @@ Do not inspect Git history unless historical information is genuinely required t
 `.agent/` contains framework runtime state.
 Do not inspect, modify, or reason from `.agent/` contents unless the framework explicitly asks you to do so.
 
+Runtime baseline facts are authoritative. Do not spend tool calls re-verifying them unless the repository changes during execution or contradictory evidence appears.
+
 # Tool Budget
 
 Tool calls are limited.
@@ -89,6 +91,8 @@ GOOD:
 pytest
 
 If output is large, allow the runtime to truncate displayed output. Do not alter command semantics merely to shorten output.
+
+Run validation commands directly. Do not append commands solely to discover their exit status. The runtime reports exit status explicitly as `exit_code: N`.
 
 
 # Completion Report

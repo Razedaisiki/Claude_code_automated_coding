@@ -55,8 +55,10 @@ class ToolRuntime:
                 return out
             if name == "run_command":
                 r = self.shell.run(inp["cmd"])
-                out = (r.stdout + r.stderr)[:4000] or f"exit {r.returncode}"
-                self.events.append({"tool": name, "input": dict(inp), "output": out, "exit_code": r.returncode})
+                bounded = (r.stdout + r.stderr)[:4000] or f"exit {r.returncode}"
+                out = f"exit_code: {r.returncode}\nstdout:\n{r.stdout[:3000]}\n" + (f"stderr:\n{r.stderr[:1000]}" if r.stderr else "")
+                out = out[:4000]
+                self.events.append({"tool": name, "input": dict(inp), "output": bounded, "exit_code": r.returncode})
                 return out
         except Exception as e:
             err = f"error: {e}"
