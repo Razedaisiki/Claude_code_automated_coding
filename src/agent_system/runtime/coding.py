@@ -41,7 +41,9 @@ class ClaudeCodeRuntime(CodingRuntime):
             if parts and (base / "common" / "engineering_rules.md").exists():
                 parts.append((base / "common" / "engineering_rules.md").read_text(encoding="utf-8"))
             prompt = "\n\n".join(parts)
-            user = f"Task: {task.description}\nWorkspace: {self.root}\nFiles hint: {', '.join(task.files) if task.files else 'auto-detect'}\nUse tools to inspect and modify files as needed."
+            acc = "\n".join(f"- {a}" for a in (task.acceptance or [])) or "(none)"
+            val = "\n".join(f"- {v}" for v in (task.validation or [])) or "(none)"
+            user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nWorkspace: {self.root}\nFiles hint: {', '.join(task.files) if task.files else 'auto-detect'}\nUse tools to inspect and modify files as needed."
 
             from agent_system.delivery import DeliveryConfig as _DC
             _is_local = _DC.load(self.root).mode == "local"
