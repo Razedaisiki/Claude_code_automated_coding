@@ -84,12 +84,18 @@ class ClaudeParentAgent(ParentAgent):
                 print("  plan.json created")
                 print("  plan.md rendered")
                 tasks = parse_plan_json(plan_data)
+                if not tasks:
+                    print("  Planning FAILED: structured plan contains no valid executable tasks")
+                    return AgentResult(status="FAILED", message="structured plan contains no valid executable tasks", artifacts=[])
             else:
                 plan_text = raw
                 plan_file.parent.mkdir(parents=True, exist_ok=True)
                 plan_file.write_text(plan_text, encoding="utf-8")
                 print("  plan.md created")
                 tasks = parse_plan(plan_text)
+        if not tasks:
+            print("  Planning FAILED: no executable tasks produced")
+            return AgentResult(status="FAILED", message="planning produced no executable tasks", artifacts=[])
         if tasks:
             print(f"  parsed {len(tasks)} tasks from plan")
             for t in tasks:
@@ -227,9 +233,6 @@ class ClaudeParentAgent(ParentAgent):
                         return review
                     print(f"  Retrying {t.id}...")
 
-        else:
-            self._execute(plan_text, ctx)
-
         print("Parent finished")
         return AgentResult(
             status="SUCCESS",
@@ -321,7 +324,7 @@ class ClaudeParentAgent(ParentAgent):
         out.write_text(content if content.lstrip().startswith("#") else f"# Milestone {next_id:03d}\n\n{content}", encoding="utf-8")
         return str(out)
 
-    def _quick_baseline_check(self, task, baseline, diff: str) -> dict | None:
+    def _quick_baseline_check(self, task, baseline, diff: str):
         if not baseline or not baseline.files or not task.files:
             return None
         try:
@@ -541,14 +544,11 @@ class ClaudeParentAgent(ParentAgent):
                     import json as _pj
 
                     cand = _pj.loads(invoked[s:e+1])
-                    if isinstance(cand.get("tasks"), list):
-                        return invoked
+                    if isinstance(cand, dict) and isinstance(cand.get("tasks"), list) and cand["tasks"]:
+                        return _pj.dumps(cand, ensure_ascii=False)
                 except Exception:
                     pass
-            if "task001" in invoked.lower() or '"tasks"' in invoked or '"description"' in invoked:
-                return invoked
-            # LLM returned non-JSON despite contract — fall through to structured fallback
-            print("  [plan: non-JSON response, using structured fallback]")
+            print("  [plan: invalid structured response, using structured fallback]")
         def _first_meaningful_line(t: str) -> str:
             for line in t.splitlines():
                 s = line.strip()
@@ -582,11 +582,7 @@ class ClaudeParentAgent(ParentAgent):
         return _jf.dumps(fallback, ensure_ascii=False)
 
     def _execute(self, plan: str, ctx: ProjectContext):
-        print("  execute phase")
-        print("  reading plan")
-        if ctx.task:
-            print(f"  applying plan for: {ctx.task.strip().splitlines()[0][:60]}")
-        print("  tools: read / write / bash (mock)")
+        raise RuntimeError("_execute is removed — no executable tasks must fail, not mock-execute")
 
     def _invoke(self, system: str, user: str) -> str:
         try:
