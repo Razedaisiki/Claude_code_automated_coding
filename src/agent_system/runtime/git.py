@@ -1,6 +1,16 @@
+from dataclasses import dataclass
 from pathlib import Path
+from typing import List
 
 from agent_system.runtime.shell import Shell
+
+
+@dataclass(frozen=True)
+class ProjectChanges:
+    diff: str
+    changed_files: List[str]
+    fingerprint: str
+    has_changes: bool
 
 
 class Git:
@@ -56,6 +66,28 @@ class Git:
         if not self._check_workspace_repo():
             return False
         return True
+
+    def head_sha(self) -> str:
+        if not self._guard():
+            return ""
+        r = self.shell.run("git rev-parse HEAD")
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    def commit_parent(self, sha: str = "HEAD") -> str:
+        if not sha:
+            return ""
+        if not self._guard():
+            return ""
+        r = self.shell.run(f"git rev-parse {sha}^")
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    def commit_subject(self, sha: str = "HEAD") -> str:
+        if not sha:
+            return ""
+        if not self._guard():
+            return ""
+        r = self.shell.run(f"git log -1 --format=%s {sha}")
+        return r.stdout.strip() if r.returncode == 0 else ""
 
     def diff(self, args: str = "") -> str:
         if not self._guard():
@@ -129,19 +161,17 @@ class Git:
             return {"status": "FAILED", "returncode": 1, "sha": None, "message": "empty message"}
         if not self._guard():
             return {"status": "FAILED", "returncode": 1, "sha": None, "message": "not a git repository"}
-        before = self.shell.run("git rev-parse HEAD")
-        before_sha = before.stdout.strip() if before.returncode == 0 else None
+        before = self.head_sha() or None
         self.ensure_runtime_isolation()
         self.shell.run("git add -A")
         r = self.shell.run(f"git commit -m {self._quote(message)}")
-        after = self.shell.run("git rev-parse HEAD")
-        after_sha = after.stdout.strip() if after.returncode == 0 else None
+        after = self.head_sha() or None
         out = (r.stdout + r.stderr).strip()
-        if r.returncode == 0 and after_sha and after_sha != before_sha:
-            return {"status": "SUCCESS", "returncode": 0, "sha": after_sha, "message": out}
-        if r.returncode == 0 and after_sha == before_sha:
-            return {"status": "FAILED", "returncode": 1, "sha": after_sha, "message": "commit did not advance HEAD: " + out}
-        return {"status": "FAILED", "returncode": r.returncode, "sha": after_sha, "message": out}
+        if r.returncode == 0 and after and after != before:
+            return {"status": "SUCCESS", "returncode": 0, "sha": after, "message": out}
+        if r.returncode == 0 and after == before:
+            return {"status": "FAILED", "returncode": 1, "sha": after, "message": "commit did not advance HEAD: " + out}
+        return {"status": "FAILED", "returncode": r.returncode, "sha": after, "message": out}
 
     def commit_diff(self, sha: str) -> str:
         if not sha:
@@ -185,18 +215,24 @@ class Git:
         return "'" + s.replace("'", "'\"'\"'") + "'"
 
     def changed_files(self) -> list:
-        out = self.status()
-        files = []
-        for line in out.splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2:
-                files.append(parts[-1])
-        return files
+        if not self._guard():
+            return []
+        tracked = self.shell.run("git diff --name-only HEAD").stdout
+        untracked = self.shell.run("git ls-files --others --exclude-standard").stdout
+        files = set()
+        for line in tracked.splitlines():
+            f = line.strip()
+            if f and ".agent/" not in f and "__pycache__" not in f and not f.endswith(".pyc"):
+                files.add(f)
+        for line in untracked.splitlines():
+            f = line.strip()
+            if f and ".agent/" not in f and "__pycache__" not in f and not f.endswith(".pyc"):
+                files.add(f)
+        return sorted(files)
 
-    def project_changes_model(self):
-        from dataclasses import dataclass
+    def project_changes_model(self) -> ProjectChanges:
         import hashlib
 
         raw = self.project_changes()
         files = self.changed_files()
-        return type("ProjectChanges", (), {"diff": raw, "changed_files": files, "fingerprint": hashlib.sha256(raw.encode()).hexdigest(), "has_changes": bool(raw.strip())})()
+        return ProjectChanges(diff=raw, changed_files=files, fingerprint=hashlib.sha256(raw.encode()).hexdigest(), has_changes=bool(raw.strip()))

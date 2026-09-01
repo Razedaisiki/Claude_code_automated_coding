@@ -28,28 +28,57 @@ class Supervisor:
         self.sessions = SessionManager(self.root)
         self.parent = parent or _default_parent(self.root)
 
+    def _finalize_parent_result(self, result):
+        if hasattr(result, "status") and result.status == "FAILED":
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            return result
+        try:
+            from agent_system.runtime.checkpoint import Checkpoint, TaskPhase
+
+            Checkpoint(self.root).validate()
+            delivery = self.state.load().get("delivery") or {}
+            if delivery and delivery.get("phase") != TaskPhase.TASK_COMPLETED.value:
+                self.state.update(status="FAILED")
+                print(f"State {self.state.load()['status']}")
+                from agent_system.agents.models import AgentResult
+
+                return AgentResult(status="FAILED", message=f"Parent returned SUCCESS with unfinished phase {delivery.get('phase')}", artifacts=[])
+        except Exception as e:
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            from agent_system.agents.models import AgentResult
+
+            return AgentResult(status="FAILED", message=f"finalization guard failed: {e}", artifacts=[])
+        self.state.update(status="COMPLETED")
+        print(f"State {self.state.load()['status']}")
+        return result
+
     def start(self):
         print("Supervisor started")
         from agent_system.runtime.git import Git
 
         git = Git(self.root)
-        from agent_system.delivery import DeliveryConfig
-
-        cfg = DeliveryConfig.load(self.root)
-        if cfg.mode == "gh" and not git.is_workspace_repo():
-            print("Cannot start workflow in gh mode: workspace is not an initialized Git repository.")
+        if not git.is_workspace_repo():
+            print("Cannot start workflow: workspace must be an initialized Git repository.")
             print(f"Expected Git root: {self.root.resolve()}")
             print("Initialize Git in this project before running xxx (e.g. git init).")
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")
             return
+        try:
+            self.state.validate()
+        except RuntimeError as e:
+            print(f"State validation failed: {e}")
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            return
         git.ensure_runtime_isolation()
-        raw_status = git.status()
-        filtered = "\n".join(l for l in raw_status.splitlines() if ".agent/" not in l and "__pycache__" not in l)
-        if filtered.strip():
+        changes = git.project_changes_model()
+        if changes.has_changes:
             print("Workspace has existing changes.")
             print("Preparing pre-workflow snapshot...")
-            diff = git.project_changes()
+            diff = changes.diff
             try:
                 from agent_system.agents.claude_parent import ClaudeParentAgent
 
@@ -68,71 +97,30 @@ class Supervisor:
                 print(f"  {out.get('message','')[:120]}")
 
         session = self.sessions.create()
-        self.state.update(status="RUNNING", session_id=session["id"], delivery={}, execution_mode="NEW")
+        self.state.start_new_execution(session["id"])
         print(f"State {self.state.load()['status']} session {session['id']}")
 
         task = session["task"]
         try:
             result = self.parent.run(task)
-            if hasattr(result, "status") and result.status == "FAILED":
-                self.state.update(status="FAILED")
-                print(f"State {self.state.load()['status']}")
-                print(f"Parent failed: {result.message}")
-                return result
+            return self._finalize_parent_result(result)
         except KeyboardInterrupt:
-            self.state.update(status="FAILED")
-            print(f"State {self.state.load()['status']}")
+            print("Workflow interrupted; checkpoint preserved for resume.")
             raise
         except Exception:
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")
             raise
 
-        self.state.update(status="COMPLETED")
-        print(f"State {self.state.load()['status']}")
-        return result if "result" in locals() else None
-
     def resume(self):
+        try:
+            self.state.validate()
+        except RuntimeError as e:
+            print(f"Cannot resume: {e}")
+            self.state.update(status="FAILED")
+            print(f"State {self.state.load()['status']}")
+            return
         state = self.state.load()
-        delivery = state.get("delivery") or {}
-        phase = delivery.get("phase")
-        if phase == "WAITING_CI" and delivery.get("commit_sha"):
-            sha = delivery["commit_sha"]
-            cur_idx = delivery.get("current_task_index")
-            print(f"Resuming WAITING_CI for {sha[:7]}")
-            from agent_system.runtime.ci_monitor import CIMonitor
-            from agent_system.runtime.checkpoint import TaskPhase
-
-            ci_res = CIMonitor(self.root).wait_for_commit(sha)
-            if ci_res["status"] == "CI_PASSED":
-                self.state.update_delivery(ci_status="CI_PASSED", phase=TaskPhase.TASK_COMPLETED.value, completed_task_index=cur_idx)
-                print("CI_PASSED, marking task completed")
-            elif ci_res["status"] == "CI_FAILED":
-                print(f"CI_FAILED: {ci_res.get('message','')[:80]}")
-                self.state.update_delivery(ci_status="CI_FAILED", phase=TaskPhase.CI_REVIEW.value)
-            elif ci_res["status"] == "CI_NOT_DETECTED":
-                self.state.update_delivery(ci_status="CI_NOT_DETECTED", phase=TaskPhase.TASK_COMPLETED.value, completed_task_index=cur_idx)
-                print("CI_NOT_DETECTED, marking task completed")
-            else:
-                self.state.update_delivery(phase=TaskPhase.CI_REVIEW.value)
-        elif state.get("status") == "WAITING_CI" and state.get("delivery", {}).get("commit_sha"):
-            # Legacy status-based WAITING_CI
-            sha = state["delivery"]["commit_sha"]
-            print(f"Resuming WAITING_CI for {sha[:7]}")
-            from agent_system.runtime.ci_monitor import CIMonitor
-
-            ci_res = CIMonitor(self.root).wait_for_commit(sha)
-            if ci_res["status"] == "CI_PASSED":
-                self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_PASSED"})
-                print("CI_PASSED, continuing to next task")
-            elif ci_res["status"] == "CI_FAILED":
-                print(f"CI_FAILED: {ci_res.get('message','')[:80]}")
-                self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_FAILED"})
-            elif ci_res["status"] == "CI_NOT_DETECTED":
-                self.state.update(status="RUNNING", delivery={**state.get("delivery", {}), "ci_status": "CI_NOT_DETECTED"})
-                print("No CI, continuing")
-            else:
-                self.state.update(status="RUNNING")
         sid = state.get("session_id")
         if not sid:
             print("No session to resume")
@@ -148,21 +136,14 @@ class Supervisor:
         task = session["task"]
         try:
             result = self.parent.run(task)
-            if hasattr(result, "status") and result.status == "FAILED":
-                self.state.update(status="FAILED")
-                print(f"State {self.state.load()['status']}")
-                return result
+            return self._finalize_parent_result(result)
         except KeyboardInterrupt:
-            self.state.update(status="FAILED")
-            print(f"State {self.state.load()['status']}")
+            print("Workflow interrupted; checkpoint preserved for resume.")
             raise
         except Exception:
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")
             raise
-        self.state.update(status="COMPLETED")
-        print(f"State {self.state.load()['status']}")
-        print("DONE")
 
     def stop(self):
         self.state.update(status="COMPLETED")

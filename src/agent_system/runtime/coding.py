@@ -1,10 +1,15 @@
 from abc import ABC, abstractmethod
+import os
 from pathlib import Path
 
 from agent_system.agents.models import AgentResult, AgentTask
 from agent_system.context import ProjectContext
 from agent_system.runtime.git import Git
 from agent_system.runtime.tools import TOOLS, ToolRuntime
+
+
+def _is_mock_mode() -> bool:
+    return os.getenv("XXX_MOCK") == "1"
 
 
 class CodingRuntime(ABC):
@@ -41,16 +46,17 @@ class ClaudeCodeRuntime(CodingRuntime):
     def execute(self, task: AgentTask, context: ProjectContext) -> AgentResult:
         from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 
-        api_key = resolve_api_key()
-        if not api_key:
+        if _is_mock_mode():
             baseline = self._capture_baseline(task)
             return AgentResult(status="SUCCESS", message=f"mock code for {task.description}", artifacts=task.files, baseline=baseline)
+        api_key = resolve_api_key()
+        if not api_key:
+            raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use XXX_MOCK=1 for mock mode.")
 
         try:
             import anthropic
 
             import hashlib
-            import os
 
             base_url = resolve_base_url()
             client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=40) if base_url else anthropic.Anthropic(api_key=api_key, timeout=40)
@@ -85,7 +91,7 @@ class ClaudeCodeRuntime(CodingRuntime):
             max_stagnant = min(max(1, int(os.getenv("XXX_STAGNANT_TURNS", str(DEFAULT_STAGNANT_TURNS)))), max_turns)
 
             def _diff_fp() -> str:
-                return hashlib.sha256(self.git.diff().encode("utf-8")).hexdigest()
+                return self.git.project_changes_model().fingerprint
 
             last_fp = _diff_fp()
             stagnant = 0

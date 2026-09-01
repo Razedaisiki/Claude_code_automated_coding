@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 ALLOWED_STATUSES = {
     "INITIALIZED", "RUNNING", "REVIEW_PENDING", "COMMITTING",
@@ -27,6 +27,22 @@ class StateManager:
             state["schema_version"] = CURRENT_SCHEMA_VERSION
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+    def start_new_execution(self, session_id: str) -> dict:
+        state = self.load()
+        state["schema_version"] = CURRENT_SCHEMA_VERSION
+        state["status"] = "RUNNING"
+        state["session_id"] = session_id
+        state["execution_mode"] = "NEW"
+        state["delivery"] = {}
+        self.save(state)
+        return state
+
+    def replace_delivery(self, delivery: dict) -> dict:
+        state = self.load()
+        state["delivery"] = dict(delivery)
+        self.save(state)
+        return state
 
     def update(self, **kwargs) -> dict:
         state = self.load()

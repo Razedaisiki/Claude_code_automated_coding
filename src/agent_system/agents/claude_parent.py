@@ -1,11 +1,16 @@
 from pathlib import Path
+from typing import Optional
 
-from agent_system.agents.models import AgentResult
+from agent_system.agents.models import AgentResult, AgentTask
 from agent_system.agents.parent import ParentAgent
 from agent_system.config import resolve_api_key, resolve_base_url, resolve_model
 from agent_system.context import ProjectContext, load_context
 from agent_system.plan_parser import load_plan, parse_plan, parse_plan_json, render_plan_md
 from agent_system.runtime.git import Git
+
+
+MAX_REVIEW_ATTEMPTS = 3
+MAX_CI_CORRECTIONS = 3
 
 
 def _load_prompt(name: str) -> str:
@@ -32,6 +37,197 @@ class ClaudeParentAgent(ParentAgent):
         self.root = root or Path.cwd()
         self.model = model or resolve_model()
         self.git = Git(self.root)
+
+    def _resolve_active_task(self, original: AgentTask, delivery: dict) -> AgentTask:
+        ct = delivery.get("correction_task")
+        if isinstance(ct, dict) and ct.get("description"):
+            return AgentTask(
+                id=ct.get("id") or original.id,
+                role=ct.get("role") or original.role,
+                description=ct.get("description") or original.description,
+                files=ct.get("files") or original.files,
+                type=ct.get("type") or original.type,
+                required=original.required,
+                acceptance=ct.get("acceptance") or original.acceptance,
+                validation=ct.get("validation") or original.validation,
+            )
+        return original
+
+    def _run_task_state_machine(self, original: AgentTask, task_index: int, resume_current: bool = False) -> AgentResult:
+        from agent_system.agents.code_agent import CodeAgent
+        from agent_system.agents.subagent import MockTestAgent
+        from agent_system.delivery import DeliveryConfig
+        from agent_system.runtime.checkpoint import Checkpoint, TaskPhase
+        from agent_system.runtime.ci_monitor import CIMonitor
+        from agent_system.runtime.delivery_runtime import DeliveryRuntime
+
+        ckpt = Checkpoint(self.root)
+        if not resume_current:
+            ckpt.begin_task(task_index, original.id)
+
+        while True:
+            delivery = (ckpt.state.load().get("delivery") or {})
+            phase = delivery.get("phase") or TaskPhase.EXECUTING.value
+            active = self._resolve_active_task(original, delivery)
+
+            if phase == TaskPhase.TASK_COMPLETED.value:
+                return AgentResult(status="SUCCESS", message=f"task {original.id} completed", artifacts=[])
+
+            if phase == TaskPhase.EXECUTING.value:
+                review_attempt = int(delivery.get("review_attempt", 1))
+                last_reason = delivery.get("last_review_reason", "")
+                diff_before = self.git.diff()
+                if active.role == "code" and review_attempt > 1 and last_reason:
+                    exec_task = AgentTask(id=active.id, role=active.role, description=active.description + f"\n[Retry {review_attempt}: previous review failed: {last_reason}]", files=active.files, type=active.type, required=active.required, acceptance=active.acceptance, validation=active.validation)
+                else:
+                    exec_task = active
+                if exec_task.role == "code":
+                    result = CodeAgent(root=self.root, model=self.model).execute(exec_task)
+                else:
+                    result = MockTestAgent().execute(exec_task)
+                diff_after = self.git.diff()
+                if getattr(result, "execution_status", "COMPLETED") == "ERROR" or result.status in ("FAILED", "INCOMPLETE"):
+                    return AgentResult(status="FAILED", message=result.message, artifacts=result.artifacts)
+                ckpt.enter_reviewing(review_snapshot={"result_status": result.status, "result_message": result.message[:800], "result_artifacts": list(result.artifacts or []), "commit_message": getattr(result, "commit_message", "") or "", "outcome_status": getattr(getattr(result, "outcome", None), "status", "") if getattr(result, "outcome", None) else "", "diff_before": diff_before, "diff_after": diff_after, "active_task_id": exec_task.id})
+                continue
+
+            if phase == TaskPhase.REVIEWING.value:
+                snap = delivery.get("review_snapshot") or {}
+                diff_before = snap.get("diff_before", "")
+                diff_after = snap.get("diff_after", "")
+                commit_message = snap.get("commit_message", "")
+                outcome_status = snap.get("outcome_status", "")
+                tmp_result = AgentResult(status=snap.get("result_status", "SUCCESS"), message=snap.get("result_message", ""), artifacts=snap.get("result_artifacts", []))
+                if outcome_status:
+                    from agent_system.agents.models import TaskOutcome
+                    tmp_result.outcome = TaskOutcome(task_id=active.id, status=outcome_status)
+                review = self._review(active, tmp_result, diff_before, diff_after)
+                if commit_message and not getattr(review, "commit_message", ""):
+                    review.commit_message = commit_message
+                if review.status == "SUCCESS":
+                    if getattr(review, "outcome", None) and review.outcome.status == "SATISFIED":
+                        ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="SATISFIED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
+                        return AgentResult(status="SUCCESS", message=review.message, artifacts=review.artifacts)
+                    if not review.commit_message:
+                        ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
+                        return AgentResult(status="SUCCESS", message=review.message, artifacts=review.artifacts)
+                    ckpt.enter_committing(pending_commit_message=review.commit_message, pre_commit_sha=self.git.head_sha())
+                    continue
+                attempt = int(delivery.get("review_attempt", 1))
+                raw_cur = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
+                filtered_cur = "\n".join(l for l in raw_cur.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l).strip()
+                if attempt >= MAX_REVIEW_ATTEMPTS:
+                    return review
+                ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=review.message, review_snapshot=None)
+                continue
+
+            if phase == TaskPhase.COMMITTING.value:
+                pending = delivery.get("pending_commit_message", "")
+                pre_sha = delivery.get("pre_commit_sha")
+                cur_sha = self.git.head_sha()
+                if cur_sha and pre_sha and cur_sha != pre_sha:
+                    parent = self.git.commit_parent(cur_sha)
+                    subj = self.git.commit_subject(cur_sha)
+                    if parent == (pre_sha or "") and subj == (pending or ""):
+                        ckpt.enter_pushing(commit_sha=cur_sha)
+                        continue
+                    if cur_sha != pre_sha:
+                        return AgentResult(status="FAILED", message="COMMITTING checkpoint inconsistent: HEAD advanced unexpectedly", artifacts=[])
+                if not self.git.is_workspace_repo():
+                    return AgentResult(status="FAILED", message="workspace not a Git repository", artifacts=[])
+                changes = self.git.project_changes_model()
+                if not changes.has_changes:
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="SATISFIED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
+                    return AgentResult(status="SUCCESS", message="no changes to commit", artifacts=[])
+                cres = DeliveryRuntime(self.root).commit(pending)
+                if cres.get("status") != "SUCCESS":
+                    return AgentResult(status="FAILED", message=f"commit failed for {original.id}: {cres.get('message','')[:200]}", artifacts=[])
+                sha = cres.get("sha")
+                cfg = DeliveryConfig.load(self.root)
+                if cfg.mode == "local":
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SKIPPED", ci_status="SKIPPED")
+                    return AgentResult(status="SUCCESS", message=f"committed {sha[:7]}", artifacts=[])
+                ckpt.enter_pushing(commit_sha=sha)
+                continue
+
+            if phase == TaskPhase.PUSHING.value:
+                sha = delivery.get("commit_sha", "")
+                if not sha:
+                    return AgentResult(status="FAILED", message="PUSHING requires commit_sha", artifacts=[])
+                push_res = DeliveryRuntime(self.root).push(commit_sha=sha)
+                if push_res["status"] == "SUCCESS":
+                    ckpt.enter_ci_discovery(commit_sha=sha)
+                    continue
+                if push_res["status"] in ("REMOTE_FAILED", "NO_REMOTE"):
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status=push_res["status"], ci_status="SKIPPED")
+                    return AgentResult(status="SUCCESS", message=f"push {push_res['status']}", artifacts=[])
+                return AgentResult(status="FAILED", message=f"push failed: {push_res.get('message','')[:200]}", artifacts=[])
+
+            if phase == TaskPhase.CI_DISCOVERY.value:
+                sha = delivery.get("commit_sha", "")
+                disc = CIMonitor(self.root).discover_for_commit(sha)
+                if disc["status"] == "CI_NOT_DETECTED":
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_NOT_DETECTED")
+                    return AgentResult(status="SUCCESS", message="CI not detected", artifacts=[])
+                ckpt.enter_waiting_ci(ci_runs=disc.get("runs", []), commit_sha=sha)
+                continue
+
+            if phase == TaskPhase.WAITING_CI.value:
+                sha = delivery.get("commit_sha", "")
+                runs = delivery.get("ci_runs") or []
+                if not runs and sha:
+                    disc = CIMonitor(self.root).discover_for_commit(sha)
+                    runs = disc.get("runs", [])
+                    if not runs:
+                        ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_NOT_DETECTED")
+                        return AgentResult(status="SUCCESS", message="CI not detected", artifacts=[])
+                    ckpt.set_phase(TaskPhase.WAITING_CI, ci_runs=runs)
+                ci_res = CIMonitor(self.root).wait_for_runs(runs)
+                if ci_res["status"] == "CI_PASSED":
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_PASSED")
+                    return AgentResult(status="SUCCESS", message="CI passed", artifacts=[])
+                if ci_res["status"] == "CI_NOT_DETECTED":
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_NOT_DETECTED")
+                    return AgentResult(status="SUCCESS", message="CI not detected", artifacts=[])
+                ckpt.enter_ci_review(ci_status="CI_FAILED", ci_failed_logs=ci_res.get("failed_logs", "")[:6000], ci_runs=ci_res.get("runs", runs), commit_sha=sha)
+                continue
+
+            if phase == TaskPhase.CI_REVIEW.value:
+                ci_logs = delivery.get("ci_failed_logs", "")
+                sha = delivery.get("commit_sha", "")
+                decision = self.ci_review(ci_status="CI_FAILED", ci_logs=ci_logs, commit_sha=sha, task=active)
+                if decision.get("decision") in ("APPROVED", "APPROVED_WITH_NOTE", "APPROVED_WITH_NOTE"):
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status=decision.get("decision"))
+                    return AgentResult(status="SUCCESS", message=decision.get("reason", "CI approved"), artifacts=[])
+                if decision.get("decision") != "CHANGES_REQUIRED":
+                    return AgentResult(status="FAILED", message=f"CI review invalid decision: {decision.get('decision')}", artifacts=[])
+                corr = decision.get("correction")
+                if not isinstance(corr, dict) or not corr.get("description"):
+                    return AgentResult(status="FAILED", message="CI review CHANGES_REQUIRED without structured correction", artifacts=[])
+                current = int(delivery.get("correction_attempt", 0) or 0)
+                if current >= MAX_CI_CORRECTIONS:
+                    return AgentResult(status="FAILED", message=f"CI correction limit exceeded for {original.id}", artifacts=[])
+                next_attempt = current + 1
+                corr_task = {
+                    "id": f"{original.id}-correction-{next_attempt}",
+                    "role": corr.get("role") or active.role,
+                    "type": corr.get("type") or active.type,
+                    "description": str(corr.get("description", "")).strip(),
+                    "acceptance": list(corr.get("acceptance", [])) or list(active.acceptance or []),
+                    "validation": list(corr.get("validation", [])) or list(active.validation or []),
+                    "files": list(corr.get("files", [])) or list(active.files or []),
+                    "source_commit_sha": sha,
+                }
+                ckpt.save_correction_task(corr_task, attempt=next_attempt)
+                ckpt.set_phase(TaskPhase.CORRECTING)
+                continue
+
+            if phase == TaskPhase.CORRECTING.value:
+                ct = delivery.get("correction_task") or {}
+                ckpt.set_phase(TaskPhase.EXECUTING, active_task_id=ct.get("id"), review_attempt=1, last_review_reason="", review_snapshot=None, pending_commit_message=None, pre_commit_sha=None, push_status=None, ci_status=None, ci_runs=None, ci_failed_logs=None)
+                continue
+
+            return AgentResult(status="FAILED", message=f"unknown phase: {phase}", artifacts=[])
 
     def run(self, task: str) -> AgentResult:
         print("Starting Claude Parent")
@@ -96,201 +292,44 @@ class ClaudeParentAgent(ParentAgent):
         if not tasks:
             print("  Planning FAILED: no executable tasks produced")
             return AgentResult(status="FAILED", message="planning produced no executable tasks", artifacts=[])
-        if tasks:
-            print(f"  parsed {len(tasks)} tasks from plan")
-            for t in tasks:
-                print(f"    {t.id} [{t.role}] {t.description}")
+        print(f"  parsed {len(tasks)} tasks from plan")
+        for t in tasks:
+            print(f"    {t.id} [{t.role}] {t.description}")
 
-            from agent_system.agents.code_agent import CodeAgent
-            from agent_system.agents.models import AgentTask
-            from agent_system.agents.subagent import MockTestAgent
-            from agent_system.supervisor.state import StateManager as _SM
+        from agent_system.supervisor.state import StateManager as _SM
+        from agent_system.runtime.checkpoint import TaskPhase
 
-            _st = _SM(self.root).load()
-            is_resume = _st.get("execution_mode") == "RESUME"
-            start_idx = 0
-            delivery = _st.get("delivery", {}) if isinstance(_st.get("delivery"), dict) else {}
-            phase = delivery.get("phase", "")
-            c_idx = delivery.get("completed_task_index")
-            cur_idx = delivery.get("current_task_index")
-            if is_resume and isinstance(c_idx, int):
-                start_idx = c_idx + 1
-                if 0 < start_idx < len(tasks):
-                    print(f"  Resuming from completed_task_index {c_idx} -> {start_idx}")
-                elif start_idx >= len(tasks):
-                    print("  All tasks already completed, skipping execution")
-                    tasks = []
-                else:
-                    start_idx = 0
-            elif is_resume and isinstance(cur_idx, int):
-                if phase in ("TASK_COMPLETED", "CI_PASSED", "CI_NOT_DETECTED"):
-                    start_idx = cur_idx + 1
-                    print(f"  Resuming from current_task_index {cur_idx} phase {phase} -> {start_idx}")
-                else:
-                    start_idx = cur_idx
-                    print(f"  Resuming current task {cur_idx} phase {phase}")
-            elif is_resume and isinstance(delivery.get("task_index"), int):
-                ti = delivery["task_index"]
-                # Legacy narrow guard: only skip if that task truly completed
-                if delivery.get("phase") == "TASK_COMPLETED" and 0 <= ti < len(tasks):
-                    start_idx = ti + 1
-                    print(f"  Resuming (legacy) from task_index {ti} -> {start_idx}")
-            elif is_resume and delivery.get("task_id"):
-                done_id = delivery["task_id"]
-                ci_s = delivery.get("ci_status", "")
-                if ci_s in ("CI_PASSED", "CI_NOT_DETECTED", "APPROVED_WITH_NOTE", "CI_NOT_CONFIGURED") and delivery.get("phase") == "TASK_COMPLETED":
-                    for _idx, _t in enumerate(tasks):
-                        if _t.id == done_id:
-                            start_idx = _idx + 1
-                            break
-                    if start_idx > 0:
-                        print(f"  Resuming from task_id {done_id} -> {start_idx}")
-            tasks = tasks[start_idx:]
+        _st = _SM(self.root).load()
+        is_resume = _st.get("execution_mode") == "RESUME"
+        delivery = _st.get("delivery") or {}
+        start_idx = 0
+        if is_resume:
+            completed = delivery.get("completed_task_index")
+            current = delivery.get("current_task_index")
+            if delivery.get("phase") == TaskPhase.TASK_COMPLETED.value and isinstance(completed, int):
+                start_idx = completed + 1
+            elif isinstance(current, int):
+                start_idx = current
+            if start_idx < 0:
+                start_idx = 0
+            if start_idx >= len(tasks):
+                print("  All tasks already completed, skipping execution")
+                return AgentResult(status="SUCCESS", message="plan executed", artifacts=[str(plan_file)], next_action="DONE")
 
-            # If resuming into CORRECTING, restore persisted correction task at the head
-            _resume_delivery = _SM(self.root).load().get("delivery") or {}
-            if _resume_delivery.get("phase") == "CORRECTING" and _resume_delivery.get("correction_task"):
-                ct = _resume_delivery["correction_task"]
-                tasks[0] = AgentTask(id=ct.get("id", tasks[0].id), role=ct.get("role", tasks[0].role), description=ct.get("description", tasks[0].description), files=ct.get("files", tasks[0].files), type=ct.get("type", tasks[0].type), required=tasks[0].required, acceptance=ct.get("acceptance", tasks[0].acceptance), validation=ct.get("validation", tasks[0].validation))
-                print(f"  Resuming CORRECTING with persisted correction: {ct.get('description','')[:80]}")
+        if not self.git.is_workspace_repo():
+            print(f"Cannot start workflow: workspace is not a Git repository [{self.root}]")
+            return AgentResult(status="FAILED", message="workspace not a Git repository", artifacts=[])
 
-            # Local workspaces must be Git repos even when not pushing
-            if not self.git.is_workspace_repo():
-                print(f"Cannot start workflow: workspace is not a Git repository [{self.root}]")
-                return AgentResult(status="FAILED", message="workspace not a Git repository", artifacts=[])
-            for task_index, t in enumerate(tasks, start=start_idx):
-                print(f"  Dispatch: {t.id} -> {t.role}")
-                from agent_system.supervisor.state import StateManager as _SM_PH
-
-                _SM_PH(self.root).update(status="RUNNING", delivery={**_SM(self.root).load().get("delivery", {}), "current_task_index": task_index, "task_id": t.id, "phase": "EXECUTING"})
-                last_diff = ""
-                last_reason = ""
-                for attempt in range(1, 4):
-                    diff_before = self.git.diff()
-                    if t.role == "code":
-                        if attempt > 1:
-                            t = AgentTask(id=t.id, role=t.role, description=t.description + f"\n[Retry {attempt}: previous review failed: {last_reason}]", files=t.files, type=t.type, required=t.required, acceptance=t.acceptance, validation=t.validation)
-                        result = CodeAgent(root=self.root, model=self.model).execute(t)
-                    else:
-                        result = MockTestAgent().execute(t)
-
-                    diff_after = self.git.diff()
-                    review = self._review(t, result, diff_before, diff_after)
-                    if review.status == "SUCCESS":
-                        if getattr(review, "outcome", None) and review.outcome.status == "SATISFIED":
-                            print(f"  Review SATISFIED for {t.id} (attempt {attempt}): {review.message}")
-                            from agent_system.delivery import DeliveryConfig as _DC_SAT
-                            from agent_system.supervisor.state import StateManager as _SM_SAT
-
-                            _SM_SAT(self.root).update(status="RUNNING", delivery={"mode": _DC_SAT.load(self.root).mode, "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "commit_sha": None, "outcome": "SATISFIED", "phase": "TASK_COMPLETED"})
-                            break
-                        print(f"  Review PASSED for {t.id} (attempt {attempt})")
-                        if t.type == "implementation" and review.commit_message:
-                            from agent_system.delivery import DeliveryConfig
-                            from agent_system.runtime.delivery_runtime import DeliveryRuntime
-                            from agent_system.supervisor.state import StateManager
-
-                            cfg_pre = DeliveryConfig.load(self.root)
-                            delivery = DeliveryRuntime(self.root)
-                            msg = review.commit_message
-                            if cfg_pre.mode == "local" and not self.git.is_workspace_repo():
-                                print(f"  Local mode (no git): skipping commit: {msg}")
-                                StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "commit_sha": None, "phase": "TASK_COMPLETED"})
-                                break
-                            cres = delivery.commit(msg)
-                            if cres.get("status") != "SUCCESS":
-                                print(f"  Commit FAILED: {cres.get('message','')[:120]}")
-                                return AgentResult(status="FAILED", message=f"commit failed for {t.id}: {cres.get('message','')[:200]}", artifacts=result.artifacts)
-                            sha = cres.get("sha")
-                            print(f"  Committed: {msg} [{sha[:7] if sha else ''}]")
-                            cfg = DeliveryConfig.load(self.root)
-                            if cfg.mode == "gh" and sha:
-                                push_res = delivery.push(commit_sha=sha)
-                                if push_res["status"] == "SUCCESS":
-                                    print(f"  Pushed: {push_res['message'][:80]}")
-                                elif push_res["status"] in ("REMOTE_FAILED", "NO_REMOTE"):
-                                    label = "Push failed (fallback to local)" if push_res["status"] == "REMOTE_FAILED" else "No remote, skipping CI"
-                                    print(f"  {label}: {push_res['message'][:80]}")
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "configured_mode": "gh", "push_status": push_res["status"], "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "commit_sha": sha, "phase": "TASK_COMPLETED"})
-                                    break
-                                else:
-                                    print(f"  Push skipped: {push_res['message'][:80]}")
-                                    break
-                                StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "phase": "WAITING_CI"})
-                                print(f"  WAITING_CI for {sha[:7]}")
-                                ci_res = delivery.wait_ci(sha)
-                                ci_status = ci_res.get("status", "CI_NOT_DETECTED")
-                                if ci_status == "CI_PASSED":
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_PASSED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
-                                    print("  CI_PASSED")
-                                elif ci_status == "CI_FAILED":
-                                    print("  CI_FAILED")
-                                    ci_decision = self.ci_review(ci_status="CI_FAILED", ci_logs=ci_res.get("failed_logs", ""), commit_sha=sha, task=t)
-                                    if ci_decision["decision"] == "CHANGES_REQUIRED":
-                                        corr_raw = ci_decision.get("correction", "")
-                                        # Support structured correction dict or plain string
-                                        if isinstance(corr_raw, dict) and corr_raw:
-                                            c_desc = str(corr_raw.get("description", "")).strip() or t.description
-                                            c_acc = list(corr_raw.get("acceptance", [])) or t.acceptance
-                                            c_val = list(corr_raw.get("validation", [])) or t.validation
-                                            c_files = list(corr_raw.get("files", [])) or t.files
-                                        else:
-                                            c_desc = str(corr_raw)[:500] or t.description
-                                            c_acc = t.acceptance
-                                            c_val = t.validation
-                                            c_files = t.files
-                                        corr_task = {"id": f"{t.id}-correction", "description": c_desc, "acceptance": c_acc, "validation": c_val, "files": c_files, "role": t.role, "type": t.type}
-                                        attempt_no = int((StateManager(self.root).load().get("delivery") or {}).get("correction_attempt", 0)) + 1
-                                        if attempt_no > 3:
-                                            print(f"  CI correction limit reached ({attempt_no}) — failing")
-                                            StateManager(self.root).update(status="FAILED", delivery={"phase": "CI_REVIEW", "correction_task": corr_task, "ci_status": "CI_FAILED"})
-                                            return AgentResult(status="FAILED", message=f"CI correction limit exceeded for {t.id}", artifacts=result.artifacts)
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "phase": "CORRECTING", "correction_task": corr_task, "correction_attempt": attempt_no})
-                                        print(f"  CI correction needed: {c_desc[:80]}")
-                                        t = AgentTask(id=corr_task["id"], role=corr_task["role"], description=corr_task["description"], files=corr_task["files"], type=corr_task["type"], required=t.required, acceptance=corr_task["acceptance"], validation=corr_task["validation"])
-                                        last_reason = ci_decision["reason"]
-                                        continue
-                                    else:
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": ci_decision["decision"], "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
-                                elif ci_status == "CI_NOT_DETECTED":
-                                    print("  No CI runs detected, continuing")
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_NOT_DETECTED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
-                                else:
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
-                            else:
-                                dres = delivery.deliver(commit_sha=sha)
-                                if dres.push_status == "SUCCESS":
-                                    print(f"  Pushed: {dres.push_message[:80]}")
-                                elif dres.push_status == "REMOTE_FAILED":
-                                    print(f"  Push failed (fallback to local): {dres.push_message[:80]}")
-                                elif dres.push_status == "NO_REMOTE":
-                                    print("  Local mode: no remote")
-                                elif dres.push_status == "SKIPPED":
-                                    print("  Local delivery: committed")
-                        break
-                    if review.status == "FAILED" and "already satisfied" not in review.message.lower() and "not yet satisfied" not in review.message.lower():
-                        cur_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-                        if cur_diff.strip() == last_diff.strip() and attempt > 1:
-                            print(f"  No new changes (same diff), stopping retry for {t.id}")
-                            return review
-                        last_diff = cur_diff
-                    else:
-                        raw_cur = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-                        filtered_cur = "\n".join(l for l in raw_cur.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l).strip()
-                        last_diff = filtered_cur
-                    last_reason = review.message
-                    print(f"  Review FAILED for {t.id} (attempt {attempt}): {review.message}")
-                    if attempt == 3:
-                        return review
-                    print(f"  Retrying {t.id}...")
+        for task_index in range(start_idx, len(tasks)):
+            original = tasks[task_index]
+            resume_current = is_resume and task_index == start_idx and delivery.get("phase") not in (None, "", TaskPhase.TASK_COMPLETED.value)
+            print(f"  Dispatch: {original.id} -> {original.role} (index {task_index})")
+            res = self._run_task_state_machine(original, task_index, resume_current=resume_current)
+            if res.status == "FAILED":
+                return res
 
         print("Parent finished")
-        return AgentResult(
-            status="SUCCESS",
-            message="plan executed",
-            artifacts=[str(plan_file)],
-            next_action="DONE",
-        )
+        return AgentResult(status="SUCCESS", message="plan executed", artifacts=[str(plan_file)], next_action="DONE")
 
     def get_context(self) -> ProjectContext:
         return load_context(self.root)
@@ -331,12 +370,8 @@ class ClaudeParentAgent(ParentAgent):
                 if decision == "CHANGES_REQUIRED":
                     corr = data.get("correction", {})
                     if isinstance(corr, dict) and corr:
-                        # Preserve structured correction as full AgentTask fields
                         return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": corr, "classification": data.get("classification", "CHANGE_RELATED")}
-                    if isinstance(corr, dict):
-                        desc = corr.get("description", "")
-                        return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": desc or str(corr), "classification": "CHANGE_RELATED"}
-                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": str(corr) if corr else text}
+                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": {}, "classification": "CHANGE_RELATED"}
         except Exception:
             pass
         if "APPROVE" in text.upper() or "CI_APPROVED" in text.upper():
@@ -344,7 +379,7 @@ class ClaudeParentAgent(ParentAgent):
         low = text.lower()
         if "existing_project" in low or "infrastructure" in low:
             return {"decision": "APPROVED_WITH_NOTE", "reason": text[:800], "classification": text[:300]}
-        return {"decision": "CHANGES_REQUIRED", "reason": text[:800], "correction": text}
+        return {"decision": "CHANGES_REQUIRED", "reason": text[:800], "correction": {"description": text[:500]}}
 
     def create_milestone(self, feedback: str = None) -> str:
         from datetime import datetime, timezone
@@ -365,15 +400,6 @@ class ClaudeParentAgent(ParentAgent):
             f"Human feedback:\n{ctx.human_feedback or '(none)'}"
         )
         content = self._invoke(system, user)
-        if content.startswith("mock result"):
-            content = (
-                f"# Milestone {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
-                f"## Objective\n{ctx.task[:200] or 'Completed task'}\n\n"
-                f"## Implementation Summary\n{content}\n\n"
-                f"## Architecture Decisions\nSee plan and diff.\n\n"
-                f"## Challenges\nNone noted.\n\n"
-                f"## Future Considerations\nContinue iteration.\n"
-            )
         milestones_dir = self.root / ".agent" / "milestones"
         milestones_dir.mkdir(parents=True, exist_ok=True)
         existing = sorted(milestones_dir.glob("*.md"))
@@ -518,28 +544,11 @@ class ClaudeParentAgent(ParentAgent):
             return None
         return None
 
-    def _review_local_no_diff(self, task, result) -> "AgentResult":
-        from agent_system.agents.models import AgentResult as _AR
-
-        hint_files = list(getattr(task, "files", None) or [])
-        candidates = []
-        for rel in hint_files:
-            p = self.root / rel
-            if p.is_file():
-                candidates.append(rel)
-        if candidates:
-            print(f"    local mode: no git diff, accepting file existence: {candidates}")
-            return _AR(status="SUCCESS", message=f"task {task.id} accepted (local, no diff)", artifacts=result.artifacts)
-        print(f"    local mode: no diff and no expected files for {task.id}, still failing")
-        return _AR(status="FAILED", message=f"task {task.id} produced no project changes", artifacts=result.artifacts)
-
     def generate_commit_message(self, diff: str, hint: str = "") -> str:
         p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
         system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/commit_message") or "Generate a commit message."
         user = f"Diff:\n{diff[:6000]}\n\nHint:\n{hint[:1000]}" if hint else f"Diff:\n{diff[:6000]}"
         text = self._invoke(system, user)
-        if text.startswith("mock result"):
-            return "chore: preserve existing changes"
         lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
         if lines:
             msg = lines[0].strip('"').strip("'").strip()
@@ -620,7 +629,6 @@ class ClaudeParentAgent(ParentAgent):
         first_meaningful = _first_meaningful_line(task)
         import json as _jf
 
-        # Try to derive files from task text
         import re as _re2
 
         _files_hint = _re2.findall(r"[\w./-]+\.py", task)
@@ -651,7 +659,7 @@ class ClaudeParentAgent(ParentAgent):
 
             api_key = resolve_api_key()
             if not api_key:
-                return self._fallback(user)
+                raise RuntimeError("API key not configured")
 
             base_url = resolve_base_url()
             if base_url:
@@ -674,9 +682,5 @@ class ClaudeParentAgent(ParentAgent):
         except Exception as e:
             raise RuntimeError(f"Parent API error: {e}") from e
 
-    def _fallback(self, task: str, error: str = "") -> str:
-        if error:
-            print(f"  [fallback: {error[:80]}]")
-        else:
-            print("  [fallback: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN, using mock]")
-        return f"mock result for task: {task[:80]}"
+    def commit_message_from_mock(self) -> str:
+        return "chore: preserve existing changes"

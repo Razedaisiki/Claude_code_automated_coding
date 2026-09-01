@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+
 from agent_system.runtime.github import GitHub
 
 
@@ -12,30 +13,31 @@ class CIMonitor:
         self.poll_interval = poll_interval
         self.timeout = timeout
 
-    def wait_for_commit(self, commit_sha: str, poll_interval: int = None, timeout: int = None) -> dict:
+    def discover_for_commit(self, commit_sha: str) -> dict:
         if not commit_sha:
             return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no commit sha"}
-
-        poll = poll_interval or self.poll_interval
-        tout = timeout or self.timeout
-
-        discovery_window = 60
+        runs = self.github.get_runs_for_commit(commit_sha)
+        if runs:
+            return {"status": "CI_FOUND", "runs": runs, "message": "runs discovered"}
         start = time.time()
-        runs: List[dict] = []
-        while time.time() - start < discovery_window:
+        while time.time() - start < 60:
+            time.sleep(5)
             runs = self.github.get_runs_for_commit(commit_sha)
             if runs:
-                break
-            time.sleep(5)
+                return {"status": "CI_FOUND", "runs": runs, "message": "runs discovered"}
+        return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no runs detected for commit"}
 
+    def wait_for_runs(self, runs: List[dict], poll_interval: int = None, timeout: int = None) -> dict:
         if not runs:
-            return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no runs detected for commit"}
-
+            return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no runs"}
+        poll = poll_interval or self.poll_interval
+        tout = timeout or self.timeout
         deadline = time.time() + tout
+        cur_runs = list(runs)
         while time.time() < deadline:
             all_done = True
             failed = []
-            for r in runs:
+            for r in cur_runs:
                 rid = str(r.get("databaseId", ""))
                 st = self.github.get_run_status(rid)
                 if st:
@@ -49,21 +51,31 @@ class CIMonitor:
                 logs = ""
                 for fr in failed[:2]:
                     logs += self.github.get_failed_logs(str(fr.get("databaseId", "")))[:3000] + "\n"
-                return {"status": "CI_FAILED", "runs": runs, "failed_logs": logs, "message": "ci failed"}
+                return {"status": "CI_FAILED", "runs": cur_runs, "failed_logs": logs, "message": "ci failed"}
 
             if all_done:
                 acceptable = {"success", "skipped", "neutral"}
-                ok = all(r.get("status") == "completed" and r.get("conclusion") in acceptable for r in runs)
+                ok = all(r.get("status") == "completed" and r.get("conclusion") in acceptable for r in cur_runs)
                 if ok:
-                    return {"status": "CI_PASSED", "runs": runs, "message": "all passed"}
-                return {"status": "CI_FAILED", "runs": runs, "message": f"unexpected conclusion: {runs[0].get('conclusion') if runs else 'unknown'}"}
+                    return {"status": "CI_PASSED", "runs": cur_runs, "message": "all passed"}
+                return {"status": "CI_FAILED", "runs": cur_runs, "message": f"unexpected conclusion: {cur_runs[0].get('conclusion') if cur_runs else 'unknown'}"}
 
             if time.time() + poll >= deadline:
                 break
             time.sleep(poll)
-            runs = self.github.get_runs_for_commit(commit_sha) or runs
+            refreshed = self.github.get_runs_for_commit(cur_runs[0].get("headSha", "") or "") if cur_runs and cur_runs[0].get("headSha") else None
+            if refreshed:
+                cur_runs = refreshed
 
-        return {"status": "CI_FAILED", "runs": runs, "message": "timeout or incomplete"}
+        return {"status": "CI_FAILED", "runs": cur_runs, "message": "timeout or incomplete"}
+
+    def wait_for_commit(self, commit_sha: str, poll_interval: int = None, timeout: int = None) -> dict:
+        if not commit_sha:
+            return {"status": "CI_NOT_DETECTED", "runs": [], "message": "no commit sha"}
+        disc = self.discover_for_commit(commit_sha)
+        if disc["status"] == "CI_NOT_DETECTED":
+            return disc
+        return self.wait_for_runs(disc["runs"], poll_interval=poll_interval, timeout=timeout)
 
     def wait_for_completion(self, run_id: str = None) -> Optional[dict]:
         if run_id is None:
