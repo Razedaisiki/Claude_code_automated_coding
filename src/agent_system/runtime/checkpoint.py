@@ -32,7 +32,7 @@ class Checkpoint:
         self.state.save(s)
         return s
 
-    def set_phase(self, phase: TaskPhase | str, **fields) -> dict:
+    def set_phase(self, phase: "TaskPhase | str", **fields) -> dict:  # type: ignore[syntax]
         s = self.state.load()
         delivery = dict(s.get("delivery") or {})
         val = phase.value if isinstance(phase, TaskPhase) else str(phase)

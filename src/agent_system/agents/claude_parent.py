@@ -147,12 +147,11 @@ class ClaudeParentAgent(ParentAgent):
                         print(f"  Resuming from task_id {done_id} -> {start_idx}")
             tasks = tasks[start_idx:]
 
-            # If resuming into CORRECTING, restore persisted correction task
+            # If resuming into CORRECTING, restore persisted correction task at the head
             _resume_delivery = _SM(self.root).load().get("delivery") or {}
             if _resume_delivery.get("phase") == "CORRECTING" and _resume_delivery.get("correction_task"):
                 ct = _resume_delivery["correction_task"]
-                # The correcting task stays bound to the current original task index
-                tasks[start_idx] = AgentTask(id=ct.get("id", tasks[start_idx].id), role=ct.get("role", tasks[start_idx].role), description=ct.get("description", tasks[start_idx].description), files=ct.get("files", tasks[start_idx].files), type=ct.get("type", tasks[start_idx].type), required=tasks[start_idx].required, acceptance=ct.get("acceptance", tasks[start_idx].acceptance), validation=ct.get("validation", tasks[start_idx].validation))
+                tasks[0] = AgentTask(id=ct.get("id", tasks[0].id), role=ct.get("role", tasks[0].role), description=ct.get("description", tasks[0].description), files=ct.get("files", tasks[0].files), type=ct.get("type", tasks[0].type), required=tasks[0].required, acceptance=ct.get("acceptance", tasks[0].acceptance), validation=ct.get("validation", tasks[0].validation))
                 print(f"  Resuming CORRECTING with persisted correction: {ct.get('description','')[:80]}")
 
             # Local workspaces must be Git repos even when not pushing
