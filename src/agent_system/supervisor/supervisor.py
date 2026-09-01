@@ -5,6 +5,12 @@ from agent_system.supervisor.state import StateManager
 
 
 def _default_parent(root: Path):
+    import os
+
+    if os.getenv("XXX_MOCK") == "1":
+        from agent_system.agents.mock_parent import MockParent
+
+        return MockParent()
     from agent_system.config import resolve_api_key
 
     api_key = resolve_api_key()
@@ -12,14 +18,9 @@ def _default_parent(root: Path):
         from agent_system.agents.mock_parent import MockParent
 
         return MockParent()
-    try:
-        from agent_system.agents.claude_parent import ClaudeParentAgent
+    from agent_system.agents.claude_parent import ClaudeParentAgent
 
-        return ClaudeParentAgent(root=root)
-    except Exception:
-        from agent_system.agents.mock_parent import MockParent
-
-        return MockParent()
+    return ClaudeParentAgent(root=root)
 
 
 class Supervisor:
@@ -64,7 +65,7 @@ class Supervisor:
                 print(f"  {out.strip()[:120]}")
 
         session = self.sessions.create()
-        self.state.update(status="RUNNING", session_id=session["id"])
+        self.state.update(status="RUNNING", session_id=session["id"], delivery={}, execution_mode="NEW")
         print(f"State {self.state.load()['status']} session {session['id']}")
 
         task = session["task"]
@@ -117,7 +118,7 @@ class Supervisor:
             return
         print(f"Found session: {sid}")
         print("Resume workflow")
-        self.state.update(status="RUNNING")
+        self.state.update(status="RUNNING", execution_mode="RESUME")
         print(f"State {self.state.load()['status']} session {sid}")
         task = session["task"]
         try:

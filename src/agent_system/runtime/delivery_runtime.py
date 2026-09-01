@@ -24,7 +24,7 @@ class DeliveryRuntime:
         self.git = Git(self.root)
         self.config = DeliveryConfig.load(self.root)
 
-    def commit(self, message: str) -> str:
+    def commit(self, message: str) -> dict:
         return self.git.commit(message)
 
     def push(self, commit_sha: str = None) -> dict:

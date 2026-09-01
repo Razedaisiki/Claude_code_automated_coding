@@ -124,15 +124,24 @@ class Git:
             lines.append(l)
         return "\n".join(lines)
 
-    def commit(self, message: str) -> str:
+    def commit(self, message: str) -> dict:
         if not message or not message.strip():
-            return "empty message"
+            return {"status": "FAILED", "returncode": 1, "sha": None, "message": "empty message"}
         if not self._guard():
-            return "not a git repository"
+            return {"status": "FAILED", "returncode": 1, "sha": None, "message": "not a git repository"}
+        before = self.shell.run("git rev-parse HEAD")
+        before_sha = before.stdout.strip() if before.returncode == 0 else None
         self.ensure_runtime_isolation()
         self.shell.run("git add -A")
         r = self.shell.run(f"git commit -m {self._quote(message)}")
-        return r.stdout + r.stderr
+        after = self.shell.run("git rev-parse HEAD")
+        after_sha = after.stdout.strip() if after.returncode == 0 else None
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode == 0 and after_sha and after_sha != before_sha:
+            return {"status": "SUCCESS", "returncode": 0, "sha": after_sha, "message": out}
+        if r.returncode == 0 and after_sha == before_sha:
+            return {"status": "FAILED", "returncode": 1, "sha": after_sha, "message": "commit did not advance HEAD: " + out}
+        return {"status": "FAILED", "returncode": r.returncode, "sha": after_sha, "message": out}
 
     def commit_diff(self, sha: str) -> str:
         if not sha:

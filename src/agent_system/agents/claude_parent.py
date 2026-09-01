@@ -46,15 +46,15 @@ class ClaudeParentAgent(ParentAgent):
 
         plan_json_file = self.root / ".agent" / "plan.json"
         plan_file = self.root / ".agent" / "plan.md"
-        existing_plan = plan_file.read_text(encoding="utf-8") if plan_file.exists() else ""
         try:
             from agent_system.supervisor.state import StateManager as _SM2
 
-            _is_resume = bool(_SM2(self.root).load().get("delivery", {}).get("task_id"))
+            _mode = _SM2(self.root).load().get("execution_mode")
+            _is_resume = _mode == "RESUME"
         except Exception:
             _is_resume = False
-        if _is_resume and existing_plan.strip():
-            plan_text = existing_plan
+        if _is_resume and plan_file.exists() and plan_file.read_text(encoding="utf-8").strip():
+            plan_text = plan_file.read_text(encoding="utf-8")
             print("  plan.md reused (resume)")
             plan_data, tasks = load_plan(self.root)
             if not tasks:
@@ -107,30 +107,51 @@ class ClaudeParentAgent(ParentAgent):
             from agent_system.supervisor.state import StateManager as _SM
 
             _st = _SM(self.root).load()
+            is_resume = _st.get("execution_mode") == "RESUME"
             start_idx = 0
-            if isinstance(_st.get("delivery", {}).get("task_index"), int):
-                start_idx = _st["delivery"]["task_index"] + 1
+            delivery = _st.get("delivery", {}) if isinstance(_st.get("delivery"), dict) else {}
+            phase = delivery.get("phase", "")
+            c_idx = delivery.get("completed_task_index")
+            cur_idx = delivery.get("current_task_index")
+            if is_resume and isinstance(c_idx, int):
+                start_idx = c_idx + 1
                 if 0 < start_idx < len(tasks):
-                    print(f"  Resuming from task index {start_idx}")
+                    print(f"  Resuming from completed_task_index {c_idx} -> {start_idx}")
                 elif start_idx >= len(tasks):
                     print("  All tasks already completed, skipping execution")
                     tasks = []
                 else:
                     start_idx = 0
-            elif _st.get("delivery", {}).get("task_id"):
-                done_id = _st["delivery"]["task_id"]
-                ci_s = _st["delivery"].get("ci_status", "")
-                if ci_s in ("CI_PASSED", "CI_NOT_DETECTED", "APPROVED_WITH_NOTE", "CI_NOT_CONFIGURED"):
+            elif is_resume and isinstance(cur_idx, int):
+                if phase in ("TASK_COMPLETED", "CI_PASSED", "CI_NOT_DETECTED"):
+                    start_idx = cur_idx + 1
+                    print(f"  Resuming from current_task_index {cur_idx} phase {phase} -> {start_idx}")
+                else:
+                    start_idx = cur_idx
+                    print(f"  Resuming current task {cur_idx} phase {phase}")
+            elif is_resume and isinstance(delivery.get("task_index"), int):
+                ti = delivery["task_index"]
+                # Legacy narrow guard: only skip if that task truly completed
+                if delivery.get("phase") == "TASK_COMPLETED" and 0 <= ti < len(tasks):
+                    start_idx = ti + 1
+                    print(f"  Resuming (legacy) from task_index {ti} -> {start_idx}")
+            elif is_resume and delivery.get("task_id"):
+                done_id = delivery["task_id"]
+                ci_s = delivery.get("ci_status", "")
+                if ci_s in ("CI_PASSED", "CI_NOT_DETECTED", "APPROVED_WITH_NOTE", "CI_NOT_CONFIGURED") and delivery.get("phase") == "TASK_COMPLETED":
                     for _idx, _t in enumerate(tasks):
                         if _t.id == done_id:
                             start_idx = _idx + 1
                             break
                     if start_idx > 0:
-                        print(f"  Resuming from task index {start_idx} (by task_id)")
+                        print(f"  Resuming from task_id {done_id} -> {start_idx}")
             tasks = tasks[start_idx:]
 
             for task_index, t in enumerate(tasks, start=start_idx):
                 print(f"  Dispatch: {t.id} -> {t.role}")
+                from agent_system.supervisor.state import StateManager as _SM_PH
+
+                _SM_PH(self.root).update(status="RUNNING", delivery={**_SM(self.root).load().get("delivery", {}), "current_task_index": task_index, "task_id": t.id, "phase": "EXECUTING"})
                 last_diff = ""
                 last_reason = ""
                 for attempt in range(1, 4):
@@ -150,7 +171,7 @@ class ClaudeParentAgent(ParentAgent):
                             from agent_system.delivery import DeliveryConfig as _DC_SAT
                             from agent_system.supervisor.state import StateManager as _SM_SAT
 
-                            _SM_SAT(self.root).update(status="RUNNING", delivery={"mode": _DC_SAT.load(self.root).mode, "task_id": t.id, "task_index": task_index, "commit_sha": None, "outcome": "SATISFIED"})
+                            _SM_SAT(self.root).update(status="RUNNING", delivery={"mode": _DC_SAT.load(self.root).mode, "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "commit_sha": None, "outcome": "SATISFIED", "phase": "TASK_COMPLETED"})
                             break
                         print(f"  Review PASSED for {t.id} (attempt {attempt})")
                         if t.type == "implementation" and review.commit_message:
@@ -163,12 +184,14 @@ class ClaudeParentAgent(ParentAgent):
                             msg = review.commit_message
                             if cfg_pre.mode == "local" and not self.git.is_workspace_repo():
                                 print(f"  Local mode (no git): skipping commit: {msg}")
-                                StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "task_id": t.id, "task_index": task_index, "commit_sha": None})
+                                StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "commit_sha": None, "phase": "TASK_COMPLETED"})
                                 break
-                            delivery.commit(msg)
-                            print(f"  Committed: {msg}")
-                            r = self.git.shell.run("git rev-parse HEAD")
-                            sha = r.stdout.strip() if r.returncode == 0 else None
+                            cres = delivery.commit(msg)
+                            if cres.get("status") != "SUCCESS":
+                                print(f"  Commit FAILED: {cres.get('message','')[:120]}")
+                                return AgentResult(status="FAILED", message=f"commit failed for {t.id}: {cres.get('message','')[:200]}", artifacts=result.artifacts)
+                            sha = cres.get("sha")
+                            print(f"  Committed: {msg} [{sha[:7] if sha else ''}]")
                             cfg = DeliveryConfig.load(self.root)
                             if cfg.mode == "gh" and sha:
                                 push_res = delivery.push(commit_sha=sha)
@@ -177,35 +200,35 @@ class ClaudeParentAgent(ParentAgent):
                                 elif push_res["status"] in ("REMOTE_FAILED", "NO_REMOTE"):
                                     label = "Push failed (fallback to local)" if push_res["status"] == "REMOTE_FAILED" else "No remote, skipping CI"
                                     print(f"  {label}: {push_res['message'][:80]}")
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "configured_mode": "gh", "push_status": push_res["status"], "task_id": t.id, "task_index": task_index, "commit_sha": sha})
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "local", "configured_mode": "gh", "push_status": push_res["status"], "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "commit_sha": sha, "phase": "TASK_COMPLETED"})
                                     break
                                 else:
                                     print(f"  Push skipped: {push_res['message'][:80]}")
                                     break
-                                StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index})
+                                StateManager(self.root).update(status="WAITING_CI", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "phase": "WAITING_CI"})
                                 print(f"  WAITING_CI for {sha[:7]}")
                                 ci_res = delivery.wait_ci(sha)
                                 ci_status = ci_res.get("status", "CI_NOT_DETECTED")
                                 if ci_status == "CI_PASSED":
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_PASSED", "task_id": t.id, "task_index": task_index})
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_PASSED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
                                     print("  CI_PASSED")
                                 elif ci_status == "CI_FAILED":
                                     print("  CI_FAILED")
-                                    ci_decision = self.ci_review(ci_status="CI_FAILED", ci_logs=ci_res.get("failed_logs", ""), commit_sha=sha)
+                                    ci_decision = self.ci_review(ci_status="CI_FAILED", ci_logs=ci_res.get("failed_logs", ""), commit_sha=sha, task=t)
                                     if ci_decision["decision"] == "CHANGES_REQUIRED":
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": task_index})
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "phase": "CORRECTING"})
                                         correction = ci_decision.get("correction", "")[:500]
                                         print(f"  CI correction needed: {correction[:80]}")
                                         t = AgentTask(id=t.id, role=t.role, description=correction or t.description, files=t.files, type=t.type, required=t.required, acceptance=t.acceptance, validation=t.validation)
                                         last_reason = ci_decision["reason"]
                                         continue
                                     else:
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": ci_decision["decision"], "task_id": t.id, "task_index": task_index})
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": ci_decision["decision"], "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
                                 elif ci_status == "CI_NOT_DETECTED":
                                     print("  No CI runs detected, continuing")
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_NOT_DETECTED", "task_id": t.id, "task_index": task_index})
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_NOT_DETECTED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
                                 else:
-                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index})
+                                    StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "completed_task_index": task_index, "phase": "TASK_COMPLETED"})
                             else:
                                 dres = delivery.deliver(commit_sha=sha)
                                 if dres.push_status == "SUCCESS":
@@ -244,7 +267,7 @@ class ClaudeParentAgent(ParentAgent):
     def get_context(self) -> ProjectContext:
         return load_context(self.root)
 
-    def ci_review(self, ci_status: str, ci_logs: str = "", task: str = None, commit_sha: str = None) -> dict:
+    def ci_review(self, ci_status: str, ci_logs: str = "", task=None, commit_sha: str = None) -> dict:
         p = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
         sys_text = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/ci_review") or "You are the Tech Lead reviewing CI results."
         from agent_system.context import load_context
@@ -254,8 +277,13 @@ class ClaudeParentAgent(ParentAgent):
 
         git = Git(self.root)
         diff = git.commit_diff(commit_sha) if commit_sha else git.diff()
+        if hasattr(task, 'description'):
+            task_block = f"Executable task: {task.id}\nDescription: {task.description}\nAcceptance: {task.acceptance}\nValidation: {task.validation}\nFiles: {task.files}"
+        else:
+            task_block = str(task) if task else ""
         user = (
-            f"Task:\n{task or ctx.task}\n\n"
+            f"Original TASK:\n{ctx.task[:3000]}\n\n"
+            f"Current executable task:\n{task_block[:3000]}\n\n"
             f"Plan:\n{ctx.plan[:3000]}\n\n"
             f"Commit: {commit_sha or ''}\n\n"
             f"Diff:\n{diff[:4000]}\n\n"
@@ -381,17 +409,16 @@ class ClaudeParentAgent(ParentAgent):
         diff = filtered.strip()
         if not diff:
             sat = self._satisfaction_review(task, result)
-            if sat is not None:
-                if sat.get("decision") == "ALREADY_SATISFIED":
-                    from agent_system.agents.models import TaskOutcome
+            if sat is None:
+                print(f"  Satisfaction review unavailable for {task.id} — failing closed")
+                return AgentResult(status="FAILED", message=f"task {task.id} satisfaction review unavailable", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
+            if sat.get("decision") == "ALREADY_SATISFIED":
+                from agent_system.agents.models import TaskOutcome
 
-                    return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=result.artifacts, outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])), baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-                if sat.get("decision") == "CHANGES_REQUIRED":
-                    return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-            from agent_system.delivery import DeliveryConfig as _DC2
-            if _DC2.load(self.root).mode == "local":
-                return self._review_local_no_diff(task, result)
-            return AgentResult(status="FAILED", message=f"task {task.id} produced no project changes", artifacts=result.artifacts)
+                return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=result.artifacts, outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])), baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
+            if sat.get("decision") == "CHANGES_REQUIRED":
+                return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
+            return AgentResult(status="FAILED", message=f"task {task.id} satisfaction review error", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         ctx = load_context(self.root)
         baseline_obj = getattr(result, 'baseline', None)
         evidence_obj = getattr(result, 'evidence', None)
@@ -402,7 +429,10 @@ class ClaudeParentAgent(ParentAgent):
             print(f"    baseline advisory: {quick['reason']}")
             baseline_text += f"\nAdvisory: {quick['reason']}"
         score = self._llm_review(task, result, diff, ctx, baseline_text=baseline_text, evidence_text=evidence_text)
-        if score is not None and not score.get("pass", True):
+        if score is None:
+            print(f"  Review ERROR for {task.id}: reviewer unavailable or invalid response — failing closed")
+            return AgentResult(status="FAILED", message=f"task {task.id} review error: reviewer unavailable", artifacts=result.artifacts, baseline=baseline_obj, evidence=evidence_obj)
+        if not score.get("pass", True):
             return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts, baseline=baseline_obj, evidence=evidence_obj)
         if diff.strip():
             print(f"    diff: {diff[:200]}")
@@ -611,7 +641,7 @@ class ClaudeParentAgent(ParentAgent):
                     parts.append(block.text)
             return "\n".join(parts)
         except Exception as e:
-            return self._fallback(user, error=str(e))
+            raise RuntimeError(f"Parent API error: {e}") from e
 
     def _fallback(self, task: str, error: str = "") -> str:
         if error:
