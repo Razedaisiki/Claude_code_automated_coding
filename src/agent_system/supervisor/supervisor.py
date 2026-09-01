@@ -94,7 +94,29 @@ class Supervisor:
 
     def resume(self):
         state = self.state.load()
-        if state.get("status") == "WAITING_CI" and state.get("delivery", {}).get("commit_sha"):
+        delivery = state.get("delivery") or {}
+        phase = delivery.get("phase")
+        if phase == "WAITING_CI" and delivery.get("commit_sha"):
+            sha = delivery["commit_sha"]
+            cur_idx = delivery.get("current_task_index")
+            print(f"Resuming WAITING_CI for {sha[:7]}")
+            from agent_system.runtime.ci_monitor import CIMonitor
+            from agent_system.runtime.checkpoint import TaskPhase
+
+            ci_res = CIMonitor(self.root).wait_for_commit(sha)
+            if ci_res["status"] == "CI_PASSED":
+                self.state.update_delivery(ci_status="CI_PASSED", phase=TaskPhase.TASK_COMPLETED.value, completed_task_index=cur_idx)
+                print("CI_PASSED, marking task completed")
+            elif ci_res["status"] == "CI_FAILED":
+                print(f"CI_FAILED: {ci_res.get('message','')[:80]}")
+                self.state.update_delivery(ci_status="CI_FAILED", phase=TaskPhase.CI_REVIEW.value)
+            elif ci_res["status"] == "CI_NOT_DETECTED":
+                self.state.update_delivery(ci_status="CI_NOT_DETECTED", phase=TaskPhase.TASK_COMPLETED.value, completed_task_index=cur_idx)
+                print("CI_NOT_DETECTED, marking task completed")
+            else:
+                self.state.update_delivery(phase=TaskPhase.CI_REVIEW.value)
+        elif state.get("status") == "WAITING_CI" and state.get("delivery", {}).get("commit_sha"):
+            # Legacy status-based WAITING_CI
             sha = state["delivery"]["commit_sha"]
             print(f"Resuming WAITING_CI for {sha[:7]}")
             from agent_system.runtime.ci_monitor import CIMonitor

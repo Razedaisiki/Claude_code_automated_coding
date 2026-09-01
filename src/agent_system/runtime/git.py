@@ -192,3 +192,11 @@ class Git:
             if len(parts) >= 2:
                 files.append(parts[-1])
         return files
+
+    def project_changes_model(self):
+        from dataclasses import dataclass
+        import hashlib
+
+        raw = self.project_changes()
+        files = self.changed_files()
+        return type("ProjectChanges", (), {"diff": raw, "changed_files": files, "fingerprint": hashlib.sha256(raw.encode()).hexdigest(), "has_changes": bool(raw.strip())})()

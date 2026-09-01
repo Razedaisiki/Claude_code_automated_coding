@@ -147,6 +147,18 @@ class ClaudeParentAgent(ParentAgent):
                         print(f"  Resuming from task_id {done_id} -> {start_idx}")
             tasks = tasks[start_idx:]
 
+            # If resuming into CORRECTING, restore persisted correction task
+            _resume_delivery = _SM(self.root).load().get("delivery") or {}
+            if _resume_delivery.get("phase") == "CORRECTING" and _resume_delivery.get("correction_task"):
+                ct = _resume_delivery["correction_task"]
+                # The correcting task stays bound to the current original task index
+                tasks[start_idx] = AgentTask(id=ct.get("id", tasks[start_idx].id), role=ct.get("role", tasks[start_idx].role), description=ct.get("description", tasks[start_idx].description), files=ct.get("files", tasks[start_idx].files), type=ct.get("type", tasks[start_idx].type), required=tasks[start_idx].required, acceptance=ct.get("acceptance", tasks[start_idx].acceptance), validation=ct.get("validation", tasks[start_idx].validation))
+                print(f"  Resuming CORRECTING with persisted correction: {ct.get('description','')[:80]}")
+
+            # Local workspaces must be Git repos even when not pushing
+            if not self.git.is_workspace_repo():
+                print(f"Cannot start workflow: workspace is not a Git repository [{self.root}]")
+                return AgentResult(status="FAILED", message="workspace not a Git repository", artifacts=[])
             for task_index, t in enumerate(tasks, start=start_idx):
                 print(f"  Dispatch: {t.id} -> {t.role}")
                 from agent_system.supervisor.state import StateManager as _SM_PH
@@ -216,10 +228,27 @@ class ClaudeParentAgent(ParentAgent):
                                     print("  CI_FAILED")
                                     ci_decision = self.ci_review(ci_status="CI_FAILED", ci_logs=ci_res.get("failed_logs", ""), commit_sha=sha, task=t)
                                     if ci_decision["decision"] == "CHANGES_REQUIRED":
-                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "phase": "CORRECTING"})
-                                        correction = ci_decision.get("correction", "")[:500]
-                                        print(f"  CI correction needed: {correction[:80]}")
-                                        t = AgentTask(id=t.id, role=t.role, description=correction or t.description, files=t.files, type=t.type, required=t.required, acceptance=t.acceptance, validation=t.validation)
+                                        corr_raw = ci_decision.get("correction", "")
+                                        # Support structured correction dict or plain string
+                                        if isinstance(corr_raw, dict) and corr_raw:
+                                            c_desc = str(corr_raw.get("description", "")).strip() or t.description
+                                            c_acc = list(corr_raw.get("acceptance", [])) or t.acceptance
+                                            c_val = list(corr_raw.get("validation", [])) or t.validation
+                                            c_files = list(corr_raw.get("files", [])) or t.files
+                                        else:
+                                            c_desc = str(corr_raw)[:500] or t.description
+                                            c_acc = t.acceptance
+                                            c_val = t.validation
+                                            c_files = t.files
+                                        corr_task = {"id": f"{t.id}-correction", "description": c_desc, "acceptance": c_acc, "validation": c_val, "files": c_files, "role": t.role, "type": t.type}
+                                        attempt_no = int((StateManager(self.root).load().get("delivery") or {}).get("correction_attempt", 0)) + 1
+                                        if attempt_no > 3:
+                                            print(f"  CI correction limit reached ({attempt_no}) — failing")
+                                            StateManager(self.root).update(status="FAILED", delivery={"phase": "CI_REVIEW", "correction_task": corr_task, "ci_status": "CI_FAILED"})
+                                            return AgentResult(status="FAILED", message=f"CI correction limit exceeded for {t.id}", artifacts=result.artifacts)
+                                        StateManager(self.root).update(status="RUNNING", delivery={"mode": "gh", "commit_sha": sha, "ci_status": "CI_FAILED", "task_id": t.id, "task_index": task_index, "current_task_index": task_index, "phase": "CORRECTING", "correction_task": corr_task, "correction_attempt": attempt_no})
+                                        print(f"  CI correction needed: {c_desc[:80]}")
+                                        t = AgentTask(id=corr_task["id"], role=corr_task["role"], description=corr_task["description"], files=corr_task["files"], type=corr_task["type"], required=t.required, acceptance=corr_task["acceptance"], validation=corr_task["validation"])
                                         last_reason = ci_decision["reason"]
                                         continue
                                     else:
@@ -302,6 +331,9 @@ class ClaudeParentAgent(ParentAgent):
                     return {"decision": "APPROVED_WITH_NOTE" if decision == "NO_CODE_CHANGE" else decision, "reason": data.get("reason", text[:800]), "classification": data.get("classification", ""), "correction": data.get("correction", "")}
                 if decision == "CHANGES_REQUIRED":
                     corr = data.get("correction", {})
+                    if isinstance(corr, dict) and corr:
+                        # Preserve structured correction as full AgentTask fields
+                        return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": corr, "classification": data.get("classification", "CHANGE_RELATED")}
                     if isinstance(corr, dict):
                         desc = corr.get("description", "")
                         return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": desc or str(corr), "classification": "CHANGE_RELATED"}
