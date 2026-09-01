@@ -60,11 +60,18 @@ class Git:
     def diff(self, args: str = "") -> str:
         if not self._guard():
             return ""
-        base = f"git diff {args}".strip() if args else "git diff"
-        r = self.shell.run(base)
+        if args:
+            base = f"git diff {args}".strip()
+            r = self.shell.run(base)
+            return r.stdout
+        return self.project_changes()
+
+    def project_changes(self) -> str:
+        if not self._guard():
+            return ""
+        r = self.shell.run("git diff HEAD")
         out = r.stdout
-        ls_args = args.strip() if args.strip() else ""
-        u = self.shell.run(f"git ls-files --others --exclude-standard -- {ls_args}".strip() if ls_args else "git ls-files --others --exclude-standard")
+        u = self.shell.run("git ls-files --others --exclude-standard")
         if u.stdout.strip():
             for f in u.stdout.strip().splitlines():
                 f = f.strip()
@@ -78,7 +85,7 @@ class Git:
                             out += f"\nnew file: {f}\n"
                     else:
                         out += f"\nnew file: {f}\n"
-        return out or r.stdout
+        return out
 
     def diff_stat(self, args: str = "") -> str:
         if not self._guard():
