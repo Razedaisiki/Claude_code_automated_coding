@@ -86,7 +86,7 @@ class ClaudeCodeRuntime(CodingRuntime):
                 before = set(self.git.changed_files())
 
             DEFAULT_MAX_TURNS = 100
-            DEFAULT_STAGNANT_TURNS = 10
+            DEFAULT_STAGNANT_TURNS = 20
             max_turns = min(max(1, int(os.getenv("XXX_MAX_TURNS", str(DEFAULT_MAX_TURNS)))), 100)
             max_stagnant = min(max(1, int(os.getenv("XXX_STAGNANT_TURNS", str(DEFAULT_STAGNANT_TURNS)))), max_turns)
 
