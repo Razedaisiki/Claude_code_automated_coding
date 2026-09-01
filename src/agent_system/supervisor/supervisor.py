@@ -15,9 +15,7 @@ def _default_parent(root: Path):
 
     api_key = resolve_api_key()
     if not api_key:
-        from agent_system.agents.mock_parent import MockParent
-
-        return MockParent()
+        raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use XXX_MOCK=1 for mock mode.")
     from agent_system.agents.claude_parent import ClaudeParentAgent
 
     return ClaudeParentAgent(root=root)
@@ -51,7 +49,7 @@ class Supervisor:
         if filtered.strip():
             print("Workspace has existing changes.")
             print("Preparing pre-workflow snapshot...")
-            diff = git.diff()
+            diff = git.project_changes()
             try:
                 from agent_system.agents.claude_parent import ClaudeParentAgent
 
@@ -60,9 +58,14 @@ class Supervisor:
             except Exception:
                 msg = "chore: preserve existing changes"
             out = git.commit(msg)
-            print(f"Pre-workflow snapshot committed: {msg}")
-            if out.strip():
-                print(f"  {out.strip()[:120]}")
+            if out.get("status") != "SUCCESS":
+                print(f"Pre-workflow snapshot FAILED: {out.get('message','')[:120]}")
+                self.state.update(status="FAILED")
+                print(f"State {self.state.load()['status']}")
+                return
+            print(f"Pre-workflow snapshot committed: {msg} [{out.get('sha','')[:7]}]")
+            if out.get("message","").strip():
+                print(f"  {out.get('message','')[:120]}")
 
         session = self.sessions.create()
         self.state.update(status="RUNNING", session_id=session["id"], delivery={}, execution_mode="NEW")
