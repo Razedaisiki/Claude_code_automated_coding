@@ -12,7 +12,9 @@ def init_workspace(root: Path = None):
     prompts_dir.mkdir(parents=True, exist_ok=True)
     milestones_dir.mkdir(parents=True, exist_ok=True)
 
-    state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.3"}
+    from agent_system.supervisor.state import CURRENT_SCHEMA_VERSION
+
+    state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.3", "schema_version": CURRENT_SCHEMA_VERSION}
     (agent_dir / "state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
     cfg = agent_dir / "config.yaml"
