@@ -4,7 +4,7 @@ from typing import Union
 from agent_system.supervisor.state import StateManager
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class TaskPhase(str, Enum):
@@ -103,6 +103,7 @@ class Checkpoint:
         delivery.pop("review_snapshot", None)
         delivery.pop("pending_commit_message", None)
         delivery.pop("pre_commit_sha", None)
+        delivery.pop("task_baseline", None)
         s["delivery"] = delivery
         if "schema_version" not in s:
             s["schema_version"] = CURRENT_SCHEMA_VERSION
@@ -116,7 +117,7 @@ class Checkpoint:
         delivery["correction_attempt"] = attempt
         delivery["active_task_id"] = correction_task.get("id") if isinstance(correction_task, dict) else None
         delivery["phase"] = TaskPhase.CORRECTING.value
-        for k in ("review_snapshot", "pending_commit_message", "pre_commit_sha", "push_status"):
+        for k in ("review_snapshot", "pending_commit_message", "pre_commit_sha", "push_status", "task_baseline"):
             delivery.pop(k, None)
         s["delivery"] = delivery
         self.state.save(s)
@@ -150,6 +151,10 @@ class Checkpoint:
                 raise RuntimeError(f"{phase} requires current_task_index and task_id")
         if phase == TaskPhase.REVIEWING.value and not delivery.get("review_snapshot"):
             raise RuntimeError("REVIEWING requires review_snapshot")
+        if phase == TaskPhase.REVIEWING.value:
+            snap = delivery.get("review_snapshot") or {}
+            if "project_diff" not in snap:
+                raise RuntimeError("REVIEWING review_snapshot requires project_diff")
         if phase == TaskPhase.COMMITTING.value and not delivery.get("pending_commit_message"):
             raise RuntimeError("COMMITTING requires pending_commit_message")
         if phase == TaskPhase.COMMITTING.value and not delivery.get("pre_commit_sha") and delivery.get("pre_commit_sha") is not None:

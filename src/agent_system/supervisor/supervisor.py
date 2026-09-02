@@ -44,6 +44,13 @@ class Supervisor:
                 from agent_system.agents.models import AgentResult
 
                 return AgentResult(status="FAILED", message=f"Parent returned SUCCESS with unfinished phase {delivery.get('phase')}", artifacts=[])
+            from agent_system.runtime.git import Git
+            changes = Git(self.root).project_changes_model()
+            if changes.has_changes:
+                self.state.update(status="FAILED")
+                print(f"State {self.state.load()['status']}")
+                from agent_system.agents.models import AgentResult
+                return AgentResult(status="FAILED", message="Finalization guard failed: workflow cannot complete with pending project changes", artifacts=changes.changed_files)
         except Exception as e:
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")

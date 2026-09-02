@@ -74,48 +74,57 @@ class ClaudeParentAgent(ParentAgent):
                 return AgentResult(status="SUCCESS", message=f"task {original.id} completed", artifacts=[])
 
             if phase == TaskPhase.EXECUTING.value:
+                from agent_system.agents.models import task_baseline_from_dict, task_baseline_to_dict
+
+                baseline = task_baseline_from_dict(delivery.get("task_baseline"))
+                if baseline is None:
+                    from agent_system.runtime.coding import capture_task_baseline
+                    baseline = capture_task_baseline(self.root, active)
+                    ckpt.update_delivery(task_baseline=task_baseline_to_dict(baseline))
                 review_attempt = int(delivery.get("review_attempt", 1))
                 last_reason = delivery.get("last_review_reason", "")
-                diff_before = self.git.diff()
                 if active.role == "code" and review_attempt > 1 and last_reason:
                     exec_task = AgentTask(id=active.id, role=active.role, description=active.description + f"\n[Retry {review_attempt}: previous review failed: {last_reason}]", files=active.files, type=active.type, required=active.required, acceptance=active.acceptance, validation=active.validation)
                 else:
                     exec_task = active
                 if exec_task.role == "code":
-                    result = CodeAgent(root=self.root, model=self.model).execute(exec_task)
+                    result = CodeAgent(root=self.root, model=self.model).execute(exec_task, baseline=baseline)
                 else:
-                    result = MockTestAgent().execute(exec_task)
-                diff_after = self.git.diff()
+                    result = MockTestAgent().execute(exec_task, baseline=baseline)
                 if getattr(result, "execution_status", "COMPLETED") == "ERROR" or result.status in ("FAILED", "INCOMPLETE"):
                     return AgentResult(status="FAILED", message=result.message, artifacts=result.artifacts)
-                ckpt.enter_reviewing(review_snapshot={"result_status": result.status, "result_message": result.message[:800], "result_artifacts": list(result.artifacts or []), "commit_message": getattr(result, "commit_message", "") or "", "outcome_status": getattr(getattr(result, "outcome", None), "status", "") if getattr(result, "outcome", None) else "", "diff_before": diff_before, "diff_after": diff_after, "active_task_id": exec_task.id})
+                from agent_system.agents.models import execution_evidence_to_dict
+                changes = self.git.project_changes_model()
+                ckpt.enter_reviewing(review_snapshot={"result_status": result.status, "result_message": result.message[:800], "result_artifacts": list(result.artifacts or []), "commit_message": getattr(result, "commit_message", "") or "", "outcome_status": getattr(getattr(result, "outcome", None), "status", "") if getattr(result, "outcome", None) else "", "execution_status": getattr(result, "execution_status", "COMPLETED") or "COMPLETED", "stop_reason": getattr(result, "stop_reason", None), "evidence": execution_evidence_to_dict(getattr(result, "evidence", None)), "project_diff": changes.diff, "changed_files": list(changes.changed_files or []), "project_fingerprint": changes.fingerprint, "active_task_id": exec_task.id})
                 continue
 
             if phase == TaskPhase.REVIEWING.value:
+                from agent_system.agents.models import execution_evidence_from_dict, task_baseline_from_dict
                 snap = delivery.get("review_snapshot") or {}
-                diff_before = snap.get("diff_before", "")
-                diff_after = snap.get("diff_after", "")
                 commit_message = snap.get("commit_message", "")
                 outcome_status = snap.get("outcome_status", "")
-                tmp_result = AgentResult(status=snap.get("result_status", "SUCCESS"), message=snap.get("result_message", ""), artifacts=snap.get("result_artifacts", []))
+                baseline = task_baseline_from_dict(delivery.get("task_baseline"))
+                evidence = execution_evidence_from_dict(snap.get("evidence"))
+                tmp_result = AgentResult(status=snap.get("result_status", "SUCCESS"), message=snap.get("result_message", ""), artifacts=snap.get("result_artifacts", []), baseline=baseline, evidence=evidence, execution_status=snap.get("execution_status", "COMPLETED") or "COMPLETED", stop_reason=snap.get("stop_reason"))
                 if outcome_status:
                     from agent_system.agents.models import TaskOutcome
                     tmp_result.outcome = TaskOutcome(task_id=active.id, status=outcome_status)
-                review = self._review(active, tmp_result, diff_before, diff_after)
+                project_diff = snap.get("project_diff", "")
+                review = self._review(active, tmp_result, project_diff)
                 if commit_message and not getattr(review, "commit_message", ""):
                     review.commit_message = commit_message
                 if review.status == "SUCCESS":
                     if getattr(review, "outcome", None) and review.outcome.status == "SATISFIED":
+                        changes_now = self.git.project_changes_model()
+                        if changes_now.has_changes:
+                            return AgentResult(status="FAILED", message=f"Runtime invariant violation: SATISFIED task has pending project changes: {changes_now.changed_files}", artifacts=changes_now.changed_files)
                         ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="SATISFIED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
                         return AgentResult(status="SUCCESS", message=review.message, artifacts=review.artifacts)
                     if not review.commit_message:
-                        ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
-                        return AgentResult(status="SUCCESS", message=review.message, artifacts=review.artifacts)
+                        return AgentResult(status="FAILED", message="Approved changed task has no commit message", artifacts=tmp_result.artifacts)
                     ckpt.enter_committing(pending_commit_message=review.commit_message, pre_commit_sha=self.git.head_sha())
                     continue
                 attempt = int(delivery.get("review_attempt", 1))
-                raw_cur = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-                filtered_cur = "\n".join(l for l in raw_cur.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l).strip()
                 if attempt >= MAX_REVIEW_ATTEMPTS:
                     return review
                 ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=review.message, review_snapshot=None)
@@ -137,8 +146,7 @@ class ClaudeParentAgent(ParentAgent):
                     return AgentResult(status="FAILED", message="workspace not a Git repository", artifacts=[])
                 changes = self.git.project_changes_model()
                 if not changes.has_changes:
-                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="SATISFIED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
-                    return AgentResult(status="SUCCESS", message="no changes to commit", artifacts=[])
+                    return AgentResult(status="FAILED", message="COMMITTING checkpoint inconsistent: approved changed task has no pending project changes", artifacts=[])
                 cres = DeliveryRuntime(self.root).commit(pending)
                 if cres.get("status") != "SUCCESS":
                     return AgentResult(status="FAILED", message=f"commit failed for {original.id}: {cres.get('message','')[:200]}", artifacts=[])
@@ -445,7 +453,7 @@ class ClaudeParentAgent(ParentAgent):
             lines.append(f"{ev.tool} {ev.input} -> exit {ev.exit_code}: {ev.output[:400]}")
         return "\n".join(lines)
 
-    def _review(self, task, result: AgentResult, diff_before: str = "", diff_after: str = "") -> AgentResult:
+    def _review(self, task, result: AgentResult, project_diff: str = "") -> AgentResult:
         if getattr(result, 'execution_status', 'COMPLETED') == "ERROR" or result.status == "FAILED":
             if getattr(result, 'execution_status', None) == "ERROR":
                 return AgentResult(status="FAILED", message=f"task {task.id} runtime error: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None), execution_status="ERROR", stop_reason=getattr(result, 'stop_reason', None))
@@ -461,9 +469,7 @@ class ClaudeParentAgent(ParentAgent):
         if task.role != "code":
             return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
 
-        raw_diff = diff_after[len(diff_before):] if diff_after.startswith(diff_before) else diff_after
-        filtered = "\n".join(l for l in raw_diff.splitlines() if ".agent/" not in l and "__pycache__" not in l and ".pyc" not in l)
-        diff = filtered.strip()
+        diff = (project_diff or "").strip()
         if not diff:
             sat = self._satisfaction_review(task, result)
             if sat is None:
@@ -516,8 +522,9 @@ class ClaudeParentAgent(ParentAgent):
 
             baseline_text = self._format_baseline(getattr(result, 'baseline', None))
             evidence_text = self._format_evidence(getattr(result, 'evidence', None))
+            candidates = list(dict.fromkeys(list(task.files or []) + list(getattr(result, "artifacts", None) or [])))
             repo_evidence = ""
-            for rel in (task.files or []):
+            for rel in candidates[:8]:
                 pp = self.root / rel
                 if pp.is_file():
                     try:
@@ -526,9 +533,15 @@ class ClaudeParentAgent(ParentAgent):
                         repo_evidence += f"\n--- {rel} --- (unreadable)\n"
                 else:
                     repo_evidence += f"\n--- {rel} --- (not found)\n"
+            try:
+                r = self.git.shell.run("git ls-files")
+                listing = r.stdout.strip()[:4000] if r.returncode == 0 else ""
+            except Exception:
+                listing = ""
+            repo_evidence += f"\n--- git ls-files ---\n{listing}\n" if listing else ""
             if task.acceptance:
                 repo_evidence += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in task.acceptance)
-            user = f"Task: {task.description}\nBaseline:\n{baseline_text}\nRepo evidence:\n{repo_evidence[:3000]}\nTool evidence:\n{evidence_text[:2000]}\nPlan excerpt: {ctx.plan[:1500]}\nResult: {result.message[:500]}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
+            user = f"Task: {task.description}\nBaseline:\n{baseline_text}\nRepo evidence:\n{repo_evidence[:4000]}\nTool evidence:\n{evidence_text[:2000]}\nPlan excerpt: {ctx.plan[:1500]}\nResult: {result.message[:500]}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
             resp = client.messages.create(model=self.model or "claude-sonnet-4-20250514", max_tokens=512, system=system, messages=[{"role": "user", "content": user}])
             text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
             s = text.find("{")

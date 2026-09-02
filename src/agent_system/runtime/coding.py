@@ -1,14 +1,36 @@
 from abc import ABC, abstractmethod
 import os
 from pathlib import Path
+from typing import Optional
 
-from agent_system.agents.models import AgentResult, AgentTask
+from agent_system.agents.models import AgentResult, AgentTask, TaskBaseline
 from agent_system.context import ProjectContext
 from agent_system.runtime.git import Git
 
 
 def _is_mock_mode() -> bool:
     return os.getenv("XXX_MOCK") == "1"
+
+
+def capture_task_baseline(root: Path, task: AgentTask) -> TaskBaseline:
+    from agent_system.agents.models import FileSnapshot
+
+    root = Path(root).resolve() if root else Path.cwd().resolve()
+    git = Git(root)
+    files = {}
+    for rel in (task.files or []):
+        p = root / rel
+        if p.is_file():
+            try:
+                content = p.read_text(encoding="utf-8")
+                files[rel] = FileSnapshot(exists=True, content=content[:3000])
+            except Exception:
+                files[rel] = FileSnapshot(exists=True)
+        else:
+            files[rel] = FileSnapshot(exists=False)
+    r = git.shell.run("git rev-parse HEAD")
+    sha = r.stdout.strip() if r.returncode == 0 else ""
+    return TaskBaseline(commit_sha=sha, files=files)
 
 
 class CodingRuntime(ABC):
@@ -23,23 +45,8 @@ class ClaudeCodeRuntime(CodingRuntime):
         self.model = model
         self.git = Git(self.root)
 
-    def _capture_baseline(self, task: AgentTask):
-        from agent_system.agents.models import FileSnapshot, TaskBaseline
-
-        files = {}
-        for rel in (task.files or []):
-            p = self.root / rel
-            if p.is_file():
-                try:
-                    content = p.read_text(encoding="utf-8")
-                    files[rel] = FileSnapshot(exists=True, content=content[:3000])
-                except Exception:
-                    files[rel] = FileSnapshot(exists=True)
-            else:
-                files[rel] = FileSnapshot(exists=False)
-        r = self.git.shell.run("git rev-parse HEAD")
-        sha = r.stdout.strip() if r.returncode == 0 else ""
-        return TaskBaseline(commit_sha=sha, files=files)
+    def _capture_baseline(self, task: AgentTask) -> TaskBaseline:
+        return capture_task_baseline(self.root, task)
 
     def _build_prompt(self, task: AgentTask, baseline, context: ProjectContext) -> str:
         base = Path(__file__).parent.parent / "prompts"
@@ -61,9 +68,10 @@ class ClaudeCodeRuntime(CodingRuntime):
             return system + "\n\n" + task_block + "\n\nUse tools to inspect and modify files as needed. Leave changes in the working tree for Runtime review."
         return task_block + "\n\nUse tools to inspect and modify files as needed. Leave changes in the working tree for Runtime review."
 
-    def execute(self, task: AgentTask, context: ProjectContext) -> AgentResult:
+    def execute(self, task: AgentTask, context: ProjectContext, baseline: Optional[TaskBaseline] = None) -> AgentResult:
         if _is_mock_mode():
-            baseline = self._capture_baseline(task)
+            if baseline is None:
+                baseline = self._capture_baseline(task)
             return AgentResult(status="SUCCESS", message=f"mock code for {task.description}", artifacts=task.files, baseline=baseline)
 
         from agent_system.config import resolve_api_key
@@ -71,7 +79,8 @@ class ClaudeCodeRuntime(CodingRuntime):
         if not api_key:
             raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use XXX_MOCK=1 for mock mode.")
 
-        baseline = self._capture_baseline(task)
+        if baseline is None:
+            baseline = self._capture_baseline(task)
         from agent_system.runtime.git_control import capture_git_control_state, validate_unchanged
         git_before = capture_git_control_state(self.root)
 
