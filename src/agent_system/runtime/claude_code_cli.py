@@ -98,7 +98,6 @@ class ClaudeCodeCLI:
                 "deny": [
                     "Read(.agent/**)",
                     "Edit(.agent/**)",
-                    "Read(.git/**)",
                     "Edit(.git/**)",
                     "Bash(git add *)",
                     "Bash(git commit *)",
