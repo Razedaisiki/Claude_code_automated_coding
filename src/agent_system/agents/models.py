@@ -49,13 +49,28 @@ class ToolEvent:
     tool: str
     input: dict = field(default_factory=dict)
     output: str = ""
-    exit_code: int = 0
+    exit_code: Optional[int] = None
 
 
 @dataclass
 class ExecutionEvidence:
     events: List[ToolEvent] = field(default_factory=list)
     validation: List[ToolEvent] = field(default_factory=list)
+
+    def validation_events(self) -> List[ToolEvent]:
+        keywords = ("pytest", "python -m pytest", "npm test", "npm run test", "cargo test", "go test", "make test", "ruff", "mypy")
+        out = []
+        for ev in self.events:
+            if ev.tool != "Bash":
+                continue
+            cmd = ""
+            if isinstance(ev.input, dict):
+                cmd = str(ev.input.get("command") or ev.input.get("cmd") or "")
+            if any(k in cmd for k in keywords):
+                out.append(ev)
+        if out:
+            return out
+        return list(self.validation or [])
 
 
 AgentExecutionStatus = Literal["COMPLETED", "BUDGET_STOPPED", "ERROR"]
@@ -101,16 +116,26 @@ def task_baseline_from_dict(data) -> Optional[TaskBaseline]:
     return TaskBaseline(commit_sha=data.get("commit_sha", "") or "", files=files)
 
 
-def _tool_event_to_dict(ev: ToolEvent) -> dict:
+def _tool_event_to_dict(ev) -> dict:
     if isinstance(ev, dict):
-        return {"tool": ev.get("tool", "") or "", "input": ev.get("input") or {}, "output": ev.get("output", "") or "", "exit_code": int(ev.get("exit_code", 0) or 0)}
-    return {"tool": ev.tool or "", "input": ev.input or {}, "output": ev.output or "", "exit_code": int(ev.exit_code or 0)}
+        ec = ev.get("exit_code")
+        return {"tool": ev.get("tool", "") or "", "input": ev.get("input") or {}, "output": ev.get("output", "") or "", "exit_code": int(ec) if ec is not None else None}
+    ec = getattr(ev, "exit_code", None)
+    return {"tool": ev.tool or "", "input": ev.input or {}, "output": ev.output or "", "exit_code": int(ec) if ec is not None else None}
 
 
 def _tool_event_from_dict(data) -> ToolEvent:
     if not isinstance(data, dict):
-        return ToolEvent(tool="", input={}, output="", exit_code=0)
-    return ToolEvent(tool=data.get("tool", "") or "", input=data.get("input") or {}, output=data.get("output", "") or "", exit_code=int(data.get("exit_code", 0) or 0))
+        return ToolEvent(tool="", input={}, output="", exit_code=None)
+    ec = data.get("exit_code")
+    if ec is None:
+        exit_code = None
+    else:
+        try:
+            exit_code = int(ec)
+        except Exception:
+            exit_code = None
+    return ToolEvent(tool=data.get("tool", "") or "", input=data.get("input") or {}, output=data.get("output", "") or "", exit_code=exit_code)
 
 
 def execution_evidence_to_dict(evidence: Optional[ExecutionEvidence]) -> Optional[dict]:

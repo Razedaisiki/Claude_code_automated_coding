@@ -192,12 +192,14 @@ class ClaudeParentAgent(ParentAgent):
                     ckpt.set_phase(TaskPhase.WAITING_CI, ci_runs=runs)
                 ci_res = CIMonitor(self.root).wait_for_runs(runs)
                 if ci_res["status"] == "CI_PASSED":
-                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_PASSED")
+                    ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_PASSED", ci_runs=ci_res.get("runs", runs))
                     return AgentResult(status="SUCCESS", message="CI passed", artifacts=[])
                 if ci_res["status"] == "CI_NOT_DETECTED":
                     ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_NOT_DETECTED")
                     return AgentResult(status="SUCCESS", message="CI not detected", artifacts=[])
                 ckpt.enter_ci_review(ci_status="CI_FAILED", ci_failed_logs=ci_res.get("failed_logs", "")[:6000], ci_runs=ci_res.get("runs", runs), commit_sha=sha)
+                # persist final failed snapshot for resume
+                ckpt.update_delivery(ci_runs=ci_res.get("runs", runs))
                 continue
 
             if phase == TaskPhase.CI_REVIEW.value:

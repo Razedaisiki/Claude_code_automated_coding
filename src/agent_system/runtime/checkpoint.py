@@ -87,7 +87,7 @@ class Checkpoint:
             fields["commit_sha"] = commit_sha
         return self.set_phase(TaskPhase.CI_REVIEW, **fields)
 
-    def mark_task_completed(self, task_index: int, task_id: str, outcome: str = "CHANGED", commit_sha=None, push_status=None, ci_status=None) -> dict:
+    def mark_task_completed(self, task_index: int, task_id: str, outcome: str = "CHANGED", commit_sha=None, push_status=None, ci_status=None, ci_runs=None) -> dict:
         s = self.state.load()
         delivery = dict(s.get("delivery") or {})
         delivery.update({"current_task_index": task_index, "completed_task_index": task_index, "task_id": task_id, "active_task_id": task_id, "phase": TaskPhase.TASK_COMPLETED.value, "task_outcome": outcome})
@@ -97,6 +97,8 @@ class Checkpoint:
             delivery["push_status"] = push_status
         if ci_status is not None:
             delivery["ci_status"] = ci_status
+        if ci_runs is not None:
+            delivery["ci_runs"] = ci_runs
         delivery.pop("correction_task", None)
         delivery.pop("correction_attempt", None)
         delivery.pop("active_task_id", None)

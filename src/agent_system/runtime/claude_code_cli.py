@@ -221,6 +221,45 @@ class ClaudeCodeCLI:
         except Exception as e:
             raise RuntimeError(f"Failed to start Claude Code: {e}") from e
 
+        EXIT_CODE_PATTERNS = [re.compile(r"(?im)^Exit code\s+(-?\d+)\s*$"), re.compile(r"(?im)\bexit_code\s*:\s*(-?\d+)\b")]
+
+        def _parse_bash_exit_code(text: str):
+            for pat in EXIT_CODE_PATTERNS:
+                m = pat.search(text or "")
+                if m:
+                    try:
+                        return int(m.group(1))
+                    except Exception:
+                        continue
+            return None
+
+        def _extract_result_exit_code(payload) -> Optional[int]:
+            if not isinstance(payload, dict):
+                return None
+            for k in ("exit_code", "exitCode", "returncode", "return_code"):
+                if k in payload:
+                    try:
+                        return int(payload[k])
+                    except Exception:
+                        continue
+            return None
+
+        def _normalize_output(content) -> str:
+            if isinstance(content, list):
+                parts = []
+                for x in content:
+                    if isinstance(x, dict):
+                        parts.append(str(x.get("text", "") or x.get("output", "") or ""))
+                    else:
+                        parts.append(str(x))
+                return "\n".join(parts)
+            return str(content or "")
+
+        pending: dict = {}
+        order: List[str] = []
+        tid_to_index: dict = {}
+        completed_by_tid: dict = {}
+        debug = os.getenv("XXX_DEBUG_AGENT_TURNS") == "1"
         events: List[ToolEvent] = []
         result_text = ""
         returncode = 0
@@ -242,28 +281,54 @@ class ClaudeCodeCLI:
                     if isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_use":
-                                name = block.get("name", "")
-                                inp = block.get("input", {})
-                                events.append(ToolEvent(tool=name, input=inp if isinstance(inp, dict) else {}, output="", exit_code=0))
+                                tid = str(block.get("id", "") or "")
+                                name = block.get("name", "") or ""
+                                inp = block.get("input", {}) if isinstance(block.get("input"), dict) else {}
+                                if not tid:
+                                    tid = f"__orphan_{len(order)}"
+                                pending[tid] = {"tool": name, "input": inp}
+                                tid_to_index[tid] = len(order)
+                                order.append(tid)
                 elif etype == "user":
                     msg = ev.get("message") or {}
                     content = msg.get("content") if isinstance(msg, dict) else None
                     if isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
-                                out = block.get("content", "")
-                                if isinstance(out, list):
-                                    out = "\n".join(str(x.get("text", "")) if isinstance(x, dict) else str(x) for x in out)
-                                out = str(out)[:2000]
-                                if events:
-                                    last = events[-1]
-                                    events[-1] = ToolEvent(tool=last.tool, input=last.input, output=out, exit_code=0)
+                                tid = str(block.get("tool_use_id", "") or block.get("toolUseId", "") or "")
+                                raw_content = block.get("content", "")
+                                out = _normalize_output(raw_content)[:8000]
+                                structured_ec = _extract_result_exit_code(block)
+                                if structured_ec is None and isinstance(raw_content, dict):
+                                    structured_ec = _extract_result_exit_code(raw_content)
+                                if tid and tid in pending:
+                                    pend = pending.pop(tid)
+                                    tool = pend["tool"]
+                                    inp = pend["input"]
+                                    if tool == "Bash":
+                                        ec = structured_ec if structured_ec is not None else _parse_bash_exit_code(out)
+                                    else:
+                                        ec = None
+                                    completed_by_tid[tid] = ToolEvent(tool=tool, input=inp, output=out[:4000], exit_code=ec)
+                                else:
+                                    if debug:
+                                        print(f"[evidence warning] unmatched tool_result {tid!r}")
+                                    continue
                 elif etype == "result":
                     result_text = str(ev.get("result", "") or ev.get("output", "") or "")[:4000]
                     if not result_text:
                         result_text = str(ev)[:2000]
                 elif etype == "system" and ev.get("subtype") == "api_retry":
                     continue
+            for tid in order:
+                if tid in pending:
+                    pend = pending[tid]
+                    completed_by_tid[tid] = ToolEvent(tool=pend["tool"], input=pend["input"], output="[tool result unavailable]", exit_code=None)
+            events = [completed_by_tid[tid] for tid in order if tid in completed_by_tid]
+            if debug:
+                for ev in events:
+                    cmd = ev.input.get("command", "") if isinstance(ev.input, dict) else ""
+                    print(f"[CodeAgent tool] {ev.tool}: {cmd[:120]} exit_code={ev.exit_code} output={ev.output[:300].replace(chr(10), ' | ')}")
             if not result_text:
                 result_text = (stdout or "")[-4000:] or (stderr or "")[-2000:] or "done"
                 if len(result_text) > 4000:
