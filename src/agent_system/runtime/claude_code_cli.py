@@ -4,11 +4,14 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 from agent_system.agents.models import ExecutionEvidence, ToolEvent
+
+
+MIN_CLAUDE_CODE_VERSION = (2, 1, 248)
 
 
 @dataclass
@@ -42,20 +45,33 @@ class ClaudeCodeCLI:
     def _find_claude(self) -> str:
         p = shutil.which("claude")
         if not p:
-            raise RuntimeError("Claude Code not found: `claude` not in PATH. Install Claude Code >= 2.1.179.")
+            raise RuntimeError(f"Claude Code not found: `claude` not in PATH. Install Claude Code >= {'.'.join(str(x) for x in MIN_CLAUDE_CODE_VERSION)}.")
         return p
 
     def _check_version(self, claude_bin: str):
         try:
             r = subprocess.run([claude_bin, "--version"], capture_output=True, text=True, timeout=10)
-            out = (r.stdout + r.stderr).strip()
-            v = _parse_version(out)
-            if v and not _version_gte(v, (2, 1, 179)):
-                raise RuntimeError(f"Claude Code >= 2.1.179 required, found {out}")
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
+        except Exception as e:
+            raise RuntimeError(f"Claude Code version check failed: {e}. Required >= {'.'.join(str(x) for x in MIN_CLAUDE_CODE_VERSION)}.") from e
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode != 0:
+            raise RuntimeError(f"Claude Code --version failed (exit {r.returncode}): {out or '(no output)'}. Required >= {'.'.join(str(x) for x in MIN_CLAUDE_CODE_VERSION)}.")
+        v = _parse_version(out)
+        if v is None:
+            raise RuntimeError(f"Claude Code version unparseable: {out!r}. Required >= {'.'.join(str(x) for x in MIN_CLAUDE_CODE_VERSION)}.")
+        if not _version_gte(v, MIN_CLAUDE_CODE_VERSION):
+            raise RuntimeError(f"Claude Code >= {'.'.join(str(x) for x in MIN_CLAUDE_CODE_VERSION)} required, found {out}.")
+
+    def _check_sandbox_deps(self):
+        if not sys.platform.startswith("linux"):
+            return
+        missing = []
+        if not shutil.which("bwrap"):
+            missing.append("bubblewrap (bwrap)")
+        if not shutil.which("socat"):
+            missing.append("socat")
+        if missing:
+            raise RuntimeError(f"Claude Code sandbox dependencies missing: {', '.join(missing)}. Install bubblewrap and socat.")
 
     def _prepare_settings(self) -> Path:
         agent_dir = self.root / ".agent" / "claude-code"
@@ -72,15 +88,18 @@ class ClaudeCodeCLI:
                 "Finish by leaving project changes in the working tree for Runtime review.\n",
                 encoding="utf-8",
             )
+        hook_script = (Path(__file__).with_name("git_policy_hook.py")).resolve()
         settings = {
             "permissions": {
                 "defaultMode": "dontAsk",
+                "disableBypassPermissionsMode": "disable",
+                "disableAutoMode": "disable",
                 "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
                 "deny": [
-                    f"Read({self.root / '.agent'} >> {self.root / '.agent'}/**)",
-                    f"Edit({self.root / '.agent'} >> {self.root / '.agent'}/**)",
-                    f"Read({self.root / '.git'} >> {self.root / '.git'}/**)",
-                    f"Edit({self.root / '.git'} >> {self.root / '.git'}/**)",
+                    "Read(.agent/**)",
+                    "Edit(.agent/**)",
+                    "Read(.git/**)",
+                    "Edit(.git/**)",
                     "Bash(git add *)",
                     "Bash(git commit *)",
                     "Bash(git push *)",
@@ -102,6 +121,44 @@ class ClaudeCodeCLI:
                     "Bash(gh *)",
                 ],
             },
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": sys.executable,
+                                "args": [str(hook_script)],
+                                "timeout": 5,
+                            }
+                        ],
+                    }
+                ],
+            },
+            "sandbox": {
+                "enabled": True,
+                "failIfUnavailable": True,
+                "allowUnsandboxedCommands": False,
+                "filesystem": {
+                    "denyRead": [str(self.root / ".agent")],
+                    "denyWrite": [str(self.root / ".agent"), str(self.root / ".git")],
+                },
+                "credentials": {
+                    "files": [
+                        {"path": "~/.ssh", "mode": "deny"},
+                        {"path": "~/.config/gh/hosts.yml", "mode": "deny"},
+                        {"path": "~/.git-credentials", "mode": "deny"},
+                    ],
+                    "envVars": [
+                        {"name": "GITHUB_TOKEN", "mode": "deny"},
+                        {"name": "GH_TOKEN", "mode": "deny"},
+                        {"name": "SSH_AUTH_SOCK", "mode": "deny"},
+                        {"name": "ANTHROPIC_API_KEY", "mode": "deny"},
+                        {"name": "ANTHROPIC_AUTH_TOKEN", "mode": "deny"},
+                    ],
+                },
+            },
         }
         settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
         return settings_path
@@ -109,16 +166,9 @@ class ClaudeCodeCLI:
     def _build_command(self, claude_bin: str, prompt: str, settings_path: Path) -> List[str]:
         agent_dir = self.root / ".agent" / "claude-code"
         code_system = agent_dir / "code-system.md"
-        try:
-            r = subprocess.run([claude_bin, "--version"], capture_output=True, text=True, timeout=5)
-            v = _parse_version((r.stdout + r.stderr).strip())
-        except Exception:
-            v = None
-        has_restricted = v is not None and _version_gte(v, (2, 1, 248))
-        cmd = [claude_bin]
-        if has_restricted:
-            cmd.append("--restricted")
-        cmd += [
+        cmd = [
+            claude_bin,
+            "--restricted",
             "--bare",
             "-p", prompt,
             "--permission-mode", "dontAsk",
@@ -153,6 +203,7 @@ class ClaudeCodeCLI:
     def run(self, prompt: str, timeout: int = 1800) -> ClaudeCodeRunResult:
         claude_bin = self._find_claude()
         self._check_version(claude_bin)
+        self._check_sandbox_deps()
         settings_path = self._prepare_settings()
         cmd = self._build_command(claude_bin, prompt, settings_path)
         env = self._build_env()
