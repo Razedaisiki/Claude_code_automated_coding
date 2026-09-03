@@ -33,7 +33,6 @@ class TaskRuntime:
 
     def run_task(self, original: AgentTask, task_index: int, resume_current: bool = False) -> AgentResult:
         from agent_system.agents.code_agent import CodeAgent
-        from agent_system.agents.subagent import MockTestAgent
         from agent_system.delivery import DeliveryConfig
         from agent_system.runtime.checkpoint import Checkpoint, TaskPhase
         from agent_system.runtime.ci_monitor import CIMonitor
@@ -56,7 +55,7 @@ class TaskRuntime:
 
                 baseline = task_baseline_from_dict(delivery.get("task_baseline"))
                 if baseline is None:
-                    from agent_system.runtime.coding import capture_task_baseline
+                    from agent_system.runtime.task_baseline import capture_task_baseline
                     baseline = capture_task_baseline(self.root, active)
                     ckpt.update_delivery(task_baseline=task_baseline_to_dict(baseline))
                 review_attempt = int(delivery.get("review_attempt", 1))
@@ -68,7 +67,7 @@ class TaskRuntime:
                 if exec_task.role == "code":
                     result = CodeAgent(backend=self.coding_backend, root=self.root).execute(exec_task, baseline=baseline)
                 else:
-                    result = MockTestAgent().execute(exec_task, baseline=baseline)
+                    return AgentResult(status="FAILED", message=f"unsupported task role: {exec_task.role}", artifacts=[])
                 if getattr(result, "execution_status", "COMPLETED") == "ERROR" or result.status in ("FAILED", "INCOMPLETE"):
                     return AgentResult(status="FAILED", message=result.message, artifacts=result.artifacts)
                 from agent_system.agents.models import execution_evidence_to_dict

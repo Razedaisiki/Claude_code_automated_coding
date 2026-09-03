@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from agent_system.agents.models import AgentResult, AgentTask
 from agent_system.agents.subagent import SubAgent
@@ -9,13 +8,15 @@ from agent_system.contracts.coding import CodingBackend
 
 
 class CodeAgent(SubAgent):
-    def __init__(self, backend: Optional[CodingBackend] = None, root: Path = None, model: str = None):
+    def __init__(self, backend: CodingBackend, root: Path | None = None):
         self.root = Path(root).resolve() if root else Path.cwd().resolve()
-        if backend is None:
-            from agent_system.backends.claude_code.backend import ClaudeCodeBackend
-            backend = ClaudeCodeBackend(root=self.root, model=model)
         self.backend: CodingBackend = backend
-        self.model = model
+
+    @classmethod
+    def with_default_backend(cls, root: Path | None = None, model: str | None = None) -> "CodeAgent":
+        from agent_system.backends.claude_code.backend import ClaudeCodeBackend
+        root = Path(root).resolve() if root else Path.cwd().resolve()
+        return cls(backend=ClaudeCodeBackend(root=root, model=model), root=root)
 
     def execute(self, task: AgentTask, baseline=None) -> AgentResult:
         print(f"  [CodeAgent] {task.id}: {task.description}")

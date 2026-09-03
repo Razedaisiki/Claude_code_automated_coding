@@ -1,8 +1,9 @@
 from agent_system.backends.claude_code.backend import (
     ClaudeCodeBackend,
     ClaudeCodeBackend as ClaudeCodeRuntime,
-    capture_task_baseline,
 )
+
+from agent_system.runtime.task_baseline import capture_task_baseline
 
 CodingRuntime = ClaudeCodeBackend
 

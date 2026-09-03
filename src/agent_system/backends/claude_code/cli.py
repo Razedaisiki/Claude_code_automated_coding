@@ -184,12 +184,12 @@ class ClaudeCodeCLI:
         return cmd
 
     def _build_env(self) -> dict:
-        from agent_system.providers.anthropic.config import resolve_anthropic_api_key, resolve_anthropic_base_url
+        from agent_system.backends.claude_code.config import resolve_claude_code_api_key, resolve_claude_code_base_url
         env = os.environ.copy()
-        api_key = resolve_anthropic_api_key()
+        api_key = resolve_claude_code_api_key()
         if api_key and not env.get("ANTHROPIC_API_KEY") and not env.get("ANTHROPIC_AUTH_TOKEN"):
             env["ANTHROPIC_API_KEY"] = api_key
-        base_url = resolve_anthropic_base_url()
+        base_url = resolve_claude_code_base_url()
         if base_url and not env.get("ANTHROPIC_BASE_URL"):
             env["ANTHROPIC_BASE_URL"] = base_url
         env["GIT_TERMINAL_PROMPT"] = "0"

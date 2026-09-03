@@ -7,31 +7,11 @@ from typing import Optional
 from agent_system.agents.models import AgentResult, AgentTask, TaskBaseline
 from agent_system.context import ProjectContext
 from agent_system.runtime.git import Git
+from agent_system.runtime.task_baseline import capture_task_baseline
 
 
 def _is_mock_mode() -> bool:
     return os.getenv("XXX_MOCK") == "1"
-
-
-def capture_task_baseline(root: Path, task: AgentTask) -> TaskBaseline:
-    from agent_system.agents.models import FileSnapshot
-
-    root = Path(root).resolve() if root else Path.cwd().resolve()
-    git = Git(root)
-    files = {}
-    for rel in (task.files or []):
-        p = root / rel
-        if p.is_file():
-            try:
-                content = p.read_text(encoding="utf-8")
-                files[rel] = FileSnapshot(exists=True, content=content[:3000])
-            except Exception:
-                files[rel] = FileSnapshot(exists=True)
-        else:
-            files[rel] = FileSnapshot(exists=False)
-    r = git.shell.run("git rev-parse HEAD")
-    sha = r.stdout.strip() if r.returncode == 0 else ""
-    return TaskBaseline(commit_sha=sha, files=files)
 
 
 class ClaudeCodeBackend:
@@ -69,8 +49,8 @@ class ClaudeCodeBackend:
                 baseline = self._capture_baseline(task)
             return AgentResult(status="SUCCESS", message=f"mock code for {task.description}", artifacts=task.files, baseline=baseline)
 
-        from agent_system.providers.anthropic.config import resolve_anthropic_api_key
-        api_key = resolve_anthropic_api_key()
+        from agent_system.backends.claude_code.config import resolve_claude_code_api_key
+        api_key = resolve_claude_code_api_key()
         if not api_key:
             raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use XXX_MOCK=1 for mock mode.")
 

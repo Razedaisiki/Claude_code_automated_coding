@@ -1,10 +1,7 @@
 from enum import Enum
 from typing import Union
 
-from agent_system.supervisor.state import StateManager
-
-
-CURRENT_SCHEMA_VERSION = 4
+from agent_system.runtime.state_store import CURRENT_SCHEMA_VERSION, StateManager
 
 
 class TaskPhase(str, Enum):

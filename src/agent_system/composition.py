@@ -9,24 +9,38 @@ from agent_system.orchestration.tech_lead import TechLead
 from agent_system.orchestration.workflow import WorkflowOrchestrator
 from agent_system.runtime.task_runtime import TaskRuntime
 
-def build_default_workflow(root: Path | None = None, model: str | None = None):
+class _MockReasoningProvider:
+    def complete(self, *, system: str, user: str, max_tokens: int, timeout: int) -> str:
+        return '{"tasks":[{"description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
+
+
+class _MockCodingBackend:
+    def execute(self, task, context, baseline=None):
+        from agent_system.agents.models import AgentResult
+        return AgentResult(status="SUCCESS", message=f"mock code for {task.description}", artifacts=task.files, baseline=baseline)
+
+
+def build_default_workflow(
+    root: Path | None = None,
+    model: str | None = None,
+    *,
+    reasoning_model: str | None = None,
+    coding_model: str | None = None,
+):
     root = Path(root or Path.cwd())
+    if reasoning_model is None and model is not None:
+        reasoning_model = model
     if os.getenv("XXX_MOCK") == "1":
-        from agent_system.agents.mock_parent import MockParent
-        mp = MockParent()
-        # Return an adapter that exposes same interface as WorkflowOrchestrator
-        class MockWorkflow:
-            def __init__(self, parent): self._parent = parent; self.root = root
-            @property
-            def tech_lead(self): return self._parent  # for supervisor snapshot compat
-            def run(self, task): return self._parent.run(task)
-            def generate_commit_message(self, diff):
-                if hasattr(self._parent, "generate_commit_message"):
-                    return self._parent.generate_commit_message(diff)
-                return "chore: preserve existing changes"
-        return MockWorkflow(mp)
-    reasoning = AnthropicReasoningProvider(model=model)
+        from agent_system.orchestration.tech_lead import TechLead
+        from agent_system.orchestration.workflow import WorkflowOrchestrator
+        from agent_system.runtime.task_runtime import TaskRuntime
+        reasoning = _MockReasoningProvider()
+        tech_lead = TechLead(root=root, reasoning=reasoning)
+        coding_backend = _MockCodingBackend()
+        task_runtime = TaskRuntime(root=root, coding_backend=coding_backend, tech_lead=tech_lead)
+        return WorkflowOrchestrator(root=root, tech_lead=tech_lead, task_runtime=task_runtime)
+    reasoning = AnthropicReasoningProvider(model=reasoning_model)
     tech_lead = TechLead(root=root, reasoning=reasoning)
-    coding_backend = ClaudeCodeBackend(root=root, model=model or reasoning.model)
+    coding_backend = ClaudeCodeBackend(root=root, model=coding_model)
     task_runtime = TaskRuntime(root=root, coding_backend=coding_backend, tech_lead=tech_lead)
     return WorkflowOrchestrator(root=root, tech_lead=tech_lead, task_runtime=task_runtime)
