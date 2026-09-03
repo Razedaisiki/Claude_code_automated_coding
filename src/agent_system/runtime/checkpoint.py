@@ -155,36 +155,34 @@ def _validate_state_dict(s: dict) -> None:
     if phase in (TaskPhase.EXECUTING.value, TaskPhase.REVIEWING.value, TaskPhase.COMMITTING.value, TaskPhase.PUSHING.value, TaskPhase.CI_DISCOVERY.value, TaskPhase.WAITING_CI.value, TaskPhase.CI_REVIEW.value, TaskPhase.CORRECTING.value):
         if delivery.get("current_task_index") is None or not delivery.get("task_id"):
             raise RuntimeError(f"{phase} requires current_task_index and task_id")
-        if phase == TaskPhase.REVIEWING.value and not delivery.get("review_snapshot"):
-            raise RuntimeError("REVIEWING requires review_snapshot")
-        if phase == TaskPhase.REVIEWING.value:
-            snap = delivery.get("review_snapshot") or {}
-            if "project_diff" not in snap:
-                raise RuntimeError("REVIEWING review_snapshot requires project_diff")
-        if phase == TaskPhase.COMMITTING.value and not delivery.get("pending_commit_message"):
-            raise RuntimeError("COMMITTING requires pending_commit_message")
-        if phase == TaskPhase.COMMITTING.value and not delivery.get("pre_commit_sha") and delivery.get("pre_commit_sha") is not None:
-            pass
-        if phase == TaskPhase.PUSHING.value and not delivery.get("commit_sha"):
-            raise RuntimeError("PUSHING requires commit_sha")
-        if phase == TaskPhase.CI_DISCOVERY.value and not delivery.get("commit_sha"):
-            raise RuntimeError("CI_DISCOVERY requires commit_sha")
-        if phase == TaskPhase.WAITING_CI.value and not delivery.get("commit_sha"):
-            raise RuntimeError("WAITING_CI requires commit_sha")
-        if phase == TaskPhase.CI_REVIEW.value and not delivery.get("commit_sha"):
-            raise RuntimeError("CI_REVIEW requires commit_sha")
-        if phase == TaskPhase.CI_REVIEW.value and delivery.get("ci_status") != "CI_FAILED":
-            raise RuntimeError("CI_REVIEW requires ci_status == CI_FAILED")
-        if phase == TaskPhase.CORRECTING.value and not delivery.get("correction_task"):
-            raise RuntimeError("CORRECTING requires correction_task")
-        if phase == TaskPhase.CORRECTING.value and not isinstance(delivery.get("correction_attempt"), int):
-            raise RuntimeError("CORRECTING requires correction_attempt")
-        if phase == TaskPhase.TASK_COMPLETED.value:
-            cti = delivery.get("completed_task_index")
-            cur = delivery.get("current_task_index")
-            if isinstance(cti, int) and cti < 0:
-                raise RuntimeError("TASK_COMPLETED with invalid completed_task_index")
-            if isinstance(cti, int) and isinstance(cur, int) and cur != cti:
-                raise RuntimeError("TASK_COMPLETED requires current_task_index == completed_task_index")
-        if "schema_version" in s and s["schema_version"] != CURRENT_SCHEMA_VERSION:
-            raise RuntimeError(f"schema_version mismatch: {s['schema_version']} != {CURRENT_SCHEMA_VERSION}")
+    if phase == TaskPhase.REVIEWING.value and not delivery.get("review_snapshot"):
+        raise RuntimeError("REVIEWING requires review_snapshot")
+    if phase == TaskPhase.REVIEWING.value:
+        snap = delivery.get("review_snapshot") or {}
+        if "project_diff" not in snap:
+            raise RuntimeError("REVIEWING review_snapshot requires project_diff")
+    if phase == TaskPhase.COMMITTING.value and not delivery.get("pending_commit_message"):
+        raise RuntimeError("COMMITTING requires pending_commit_message")
+    if phase == TaskPhase.PUSHING.value and not delivery.get("commit_sha"):
+        raise RuntimeError("PUSHING requires commit_sha")
+    if phase == TaskPhase.CI_DISCOVERY.value and not delivery.get("commit_sha"):
+        raise RuntimeError("CI_DISCOVERY requires commit_sha")
+    if phase == TaskPhase.WAITING_CI.value and not delivery.get("commit_sha"):
+        raise RuntimeError("WAITING_CI requires commit_sha")
+    if phase == TaskPhase.CI_REVIEW.value and not delivery.get("commit_sha"):
+        raise RuntimeError("CI_REVIEW requires commit_sha")
+    if phase == TaskPhase.CI_REVIEW.value and delivery.get("ci_status") != "CI_FAILED":
+        raise RuntimeError("CI_REVIEW requires ci_status == CI_FAILED")
+    if phase == TaskPhase.CORRECTING.value and not delivery.get("correction_task"):
+        raise RuntimeError("CORRECTING requires correction_task")
+    if phase == TaskPhase.CORRECTING.value and not isinstance(delivery.get("correction_attempt"), int):
+        raise RuntimeError("CORRECTING requires correction_attempt")
+    if phase == TaskPhase.TASK_COMPLETED.value:
+        cti = delivery.get("completed_task_index")
+        cur = delivery.get("current_task_index")
+        if isinstance(cti, int) and cti < 0:
+            raise RuntimeError("TASK_COMPLETED with invalid completed_task_index")
+        if isinstance(cti, int) and isinstance(cur, int) and cur != cti:
+            raise RuntimeError("TASK_COMPLETED requires current_task_index == completed_task_index")
+    if "schema_version" in s and s["schema_version"] != CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(f"schema_version mismatch: {s['schema_version']} != {CURRENT_SCHEMA_VERSION}")

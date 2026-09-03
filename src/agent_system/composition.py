@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import os
 from agent_system.providers.anthropic.provider import AnthropicReasoningProvider
-from agent_system.providers.anthropic.config import resolve_anthropic_model
 from agent_system.backends.claude_code.backend import ClaudeCodeBackend
 from agent_system.orchestration.tech_lead import TechLead
 from agent_system.orchestration.workflow import WorkflowOrchestrator
@@ -12,16 +11,15 @@ from agent_system.runtime.task_runtime import TaskRuntime
 class _MockReasoningProvider:
     def complete(self, *, system: str, user: str, max_tokens: int, timeout: int) -> str:
         low_system = (system or "").lower()
-        low_user = (user or "").lower()
+        if "ci" in low_system and "review" in low_system:
+            return '{"decision":"APPROVED","reason":"mock ci approved"}'
         if "review" in low_system and "already satisfied" in low_system:
             return '{"decision":"ALREADY_SATISFIED","reason":"mock satisfied","evidence":[]}'
         if "review" in low_system:
             return '{"decision":"APPROVED","reason":"mock approved"}'
-        if "ci" in low_system and "review" in low_system:
-            return '{"decision":"APPROVED","reason":"mock ci approved"}'
         if "commit message" in low_system or "commit_message" in low_system:
             return "chore: mock commit"
-        return '{"tasks":[{"description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
+        return '{"tasks":[{"id":"task001","description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
 
 
 class _MockCodingBackend:

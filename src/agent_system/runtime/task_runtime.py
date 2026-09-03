@@ -67,7 +67,14 @@ class TaskRuntime:
                 if exec_task.role == "code":
                     from agent_system.runtime.git_control import capture_git_control_state, validate_unchanged
                     git_before = capture_git_control_state(self.root)
-                    result = CodeAgent(backend=self.coding_backend, root=self.root).execute(exec_task, baseline=baseline)
+                    try:
+                        result = CodeAgent(backend=self.coding_backend, root=self.root).execute(exec_task, baseline=baseline)
+                    except Exception:
+                        git_after = capture_git_control_state(self.root)
+                        violation = validate_unchanged(git_before, git_after)
+                        if violation:
+                            return AgentResult(status="FAILED", message=violation, artifacts=[], execution_status="ERROR", stop_reason="runtime_authority_violation")
+                        raise
                     git_after = capture_git_control_state(self.root)
                     violation = validate_unchanged(git_before, git_after)
                     if violation:
