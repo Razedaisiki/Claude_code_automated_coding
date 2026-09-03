@@ -141,13 +141,20 @@ class Checkpoint:
 
     def validate(self) -> None:
         s = self.state.load()
-        delivery = s.get("delivery") or {}
-        phase = delivery.get("phase")
-        if phase is not None and phase not in {p.value for p in TaskPhase}:
-            raise RuntimeError(f"invalid phase: {phase}")
-        if phase in (TaskPhase.EXECUTING.value, TaskPhase.REVIEWING.value, TaskPhase.COMMITTING.value, TaskPhase.PUSHING.value, TaskPhase.CI_DISCOVERY.value, TaskPhase.WAITING_CI.value, TaskPhase.CI_REVIEW.value, TaskPhase.CORRECTING.value):
-            if delivery.get("current_task_index") is None or not delivery.get("task_id"):
-                raise RuntimeError(f"{phase} requires current_task_index and task_id")
+        _validate_state_dict(s)
+
+def VALIDATE_STATE(root) -> None:
+    from agent_system.runtime.state_store import StateManager as _SM
+    _validate_state_dict(_SM(root).load())
+
+def _validate_state_dict(s: dict) -> None:
+    delivery = s.get("delivery") or {}
+    phase = delivery.get("phase")
+    if phase is not None and phase not in {p.value for p in TaskPhase}:
+        raise RuntimeError(f"invalid phase: {phase}")
+    if phase in (TaskPhase.EXECUTING.value, TaskPhase.REVIEWING.value, TaskPhase.COMMITTING.value, TaskPhase.PUSHING.value, TaskPhase.CI_DISCOVERY.value, TaskPhase.WAITING_CI.value, TaskPhase.CI_REVIEW.value, TaskPhase.CORRECTING.value):
+        if delivery.get("current_task_index") is None or not delivery.get("task_id"):
+            raise RuntimeError(f"{phase} requires current_task_index and task_id")
         if phase == TaskPhase.REVIEWING.value and not delivery.get("review_snapshot"):
             raise RuntimeError("REVIEWING requires review_snapshot")
         if phase == TaskPhase.REVIEWING.value:

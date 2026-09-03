@@ -56,27 +56,12 @@ class ClaudeCodeBackend:
 
         if baseline is None:
             baseline = self._capture_baseline(task)
-        from agent_system.runtime.git_control import capture_git_control_state, validate_unchanged
-        git_before = capture_git_control_state(self.root)
 
         prompt = self._build_prompt(task, baseline, context)
 
         from agent_system.backends.claude_code.cli import ClaudeCodeCLI
         cli = ClaudeCodeCLI(root=self.root, model=self.model)
         run_result = cli.run(prompt=prompt)
-
-        git_after = capture_git_control_state(self.root)
-        violation = validate_unchanged(git_before, git_after)
-        if violation:
-            return AgentResult(
-                status="FAILED",
-                message=violation,
-                artifacts=[],
-                baseline=baseline,
-                evidence=run_result.evidence,
-                execution_status="ERROR",
-                stop_reason="runtime_authority_violation",
-            )
 
         if run_result.execution_status == "ERROR":
             return AgentResult(

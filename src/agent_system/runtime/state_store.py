@@ -63,6 +63,5 @@ class StateManager:
         return state
 
     def validate(self) -> None:
-        from agent_system.runtime.checkpoint import Checkpoint
-
-        Checkpoint(self.root).validate()
+        from agent_system.runtime.checkpoint import _validate_state_dict as _V
+        _V(self.load())

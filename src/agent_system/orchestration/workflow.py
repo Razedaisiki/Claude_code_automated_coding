@@ -35,7 +35,7 @@ class WorkflowOrchestrator:
         plan_json_file = self.root / ".agent" / "plan.json"
         plan_file = self.root / ".agent" / "plan.md"
         try:
-            from agent_system.supervisor.state import StateManager as _SM2
+            from agent_system.runtime.state_store import StateManager as _SM2
 
             _mode = _SM2(self.root).load().get("execution_mode")
             _is_resume = _mode == "RESUME"
@@ -88,7 +88,7 @@ class WorkflowOrchestrator:
         for t in tasks:
             print(f"    {t.id} [{t.role}] {t.description}")
 
-        from agent_system.supervisor.state import StateManager as _SM
+        from agent_system.runtime.state_store import StateManager as _SM
         from agent_system.runtime.checkpoint import TaskPhase
 
         _st = _SM(self.root).load()

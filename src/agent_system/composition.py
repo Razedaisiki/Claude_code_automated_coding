@@ -11,6 +11,16 @@ from agent_system.runtime.task_runtime import TaskRuntime
 
 class _MockReasoningProvider:
     def complete(self, *, system: str, user: str, max_tokens: int, timeout: int) -> str:
+        low_system = (system or "").lower()
+        low_user = (user or "").lower()
+        if "review" in low_system and "already satisfied" in low_system:
+            return '{"decision":"ALREADY_SATISFIED","reason":"mock satisfied","evidence":[]}'
+        if "review" in low_system:
+            return '{"decision":"APPROVED","reason":"mock approved"}'
+        if "ci" in low_system and "review" in low_system:
+            return '{"decision":"APPROVED","reason":"mock ci approved"}'
+        if "commit message" in low_system or "commit_message" in low_system:
+            return "chore: mock commit"
         return '{"tasks":[{"description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
 
 
@@ -31,9 +41,6 @@ def build_default_workflow(
     if reasoning_model is None and model is not None:
         reasoning_model = model
     if os.getenv("XXX_MOCK") == "1":
-        from agent_system.orchestration.tech_lead import TechLead
-        from agent_system.orchestration.workflow import WorkflowOrchestrator
-        from agent_system.runtime.task_runtime import TaskRuntime
         reasoning = _MockReasoningProvider()
         tech_lead = TechLead(root=root, reasoning=reasoning)
         coding_backend = _MockCodingBackend()

@@ -65,7 +65,13 @@ class TaskRuntime:
                 else:
                     exec_task = active
                 if exec_task.role == "code":
+                    from agent_system.runtime.git_control import capture_git_control_state, validate_unchanged
+                    git_before = capture_git_control_state(self.root)
                     result = CodeAgent(backend=self.coding_backend, root=self.root).execute(exec_task, baseline=baseline)
+                    git_after = capture_git_control_state(self.root)
+                    violation = validate_unchanged(git_before, git_after)
+                    if violation:
+                        return AgentResult(status="FAILED", message=violation, artifacts=[], baseline=getattr(result, "baseline", None), evidence=getattr(result, "evidence", None), execution_status="ERROR", stop_reason="runtime_authority_violation")
                 else:
                     return AgentResult(status="FAILED", message=f"unsupported task role: {exec_task.role}", artifacts=[])
                 if getattr(result, "execution_status", "COMPLETED") == "ERROR" or result.status in ("FAILED", "INCOMPLETE"):
