@@ -95,7 +95,7 @@ class ClaudeParentAgent(ParentAgent):
                     return AgentResult(status="FAILED", message=result.message, artifacts=result.artifacts)
                 from agent_system.agents.models import execution_evidence_to_dict
                 changes = self.git.project_changes_model()
-                ckpt.enter_reviewing(review_snapshot={"result_status": result.status, "result_message": result.message[:800], "result_artifacts": list(result.artifacts or []), "commit_message": getattr(result, "commit_message", "") or "", "outcome_status": getattr(getattr(result, "outcome", None), "status", "") if getattr(result, "outcome", None) else "", "execution_status": getattr(result, "execution_status", "COMPLETED") or "COMPLETED", "stop_reason": getattr(result, "stop_reason", None), "evidence": execution_evidence_to_dict(getattr(result, "evidence", None)), "project_diff": changes.diff, "changed_files": list(changes.changed_files or []), "project_fingerprint": changes.fingerprint, "active_task_id": exec_task.id})
+                ckpt.enter_reviewing(review_snapshot={"result_status": result.status, "result_message": result.message, "result_artifacts": list(result.artifacts or []), "commit_message": getattr(result, "commit_message", "") or "", "outcome_status": getattr(getattr(result, "outcome", None), "status", "") if getattr(result, "outcome", None) else "", "execution_status": getattr(result, "execution_status", "COMPLETED") or "COMPLETED", "stop_reason": getattr(result, "stop_reason", None), "evidence": execution_evidence_to_dict(getattr(result, "evidence", None)), "project_diff": changes.diff, "changed_files": list(changes.changed_files or []), "project_fingerprint": changes.fingerprint, "active_task_id": exec_task.id})
                 continue
 
             if phase == TaskPhase.REVIEWING.value:
@@ -197,7 +197,7 @@ class ClaudeParentAgent(ParentAgent):
                 if ci_res["status"] == "CI_NOT_DETECTED":
                     ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="CHANGED", commit_sha=sha, push_status="SUCCESS", ci_status="CI_NOT_DETECTED")
                     return AgentResult(status="SUCCESS", message="CI not detected", artifacts=[])
-                ckpt.enter_ci_review(ci_status="CI_FAILED", ci_failed_logs=ci_res.get("failed_logs", "")[:6000], ci_runs=ci_res.get("runs", runs), commit_sha=sha)
+                ckpt.enter_ci_review(ci_status="CI_FAILED", ci_failed_logs=ci_res.get("failed_logs", ""), ci_runs=ci_res.get("runs", runs), commit_sha=sha)
                 # persist final failed snapshot for resume
                 ckpt.update_delivery(ci_runs=ci_res.get("runs", runs))
                 continue
@@ -359,12 +359,12 @@ class ClaudeParentAgent(ParentAgent):
         else:
             task_block = str(task) if task else ""
         user = (
-            f"Original TASK:\n{ctx.task[:3000]}\n\n"
-            f"Current executable task:\n{task_block[:3000]}\n\n"
-            f"Plan:\n{ctx.plan[:3000]}\n\n"
+            f"Original TASK:\n{ctx.task}\n\n"
+            f"Current executable task:\n{task_block}\n\n"
+            f"Plan:\n{ctx.plan}\n\n"
             f"Commit: {commit_sha or ''}\n\n"
-            f"Diff:\n{diff[:4000]}\n\n"
-            f"CI status: {ci_status}\n\nCI logs:\n{ci_logs[:4000]}"
+            f"Diff:\n{diff}\n\n"
+            f"CI status: {ci_status}\n\nCI logs:\n{ci_logs}"
         )
         text = self._invoke(sys_text, user)
         try:
@@ -401,12 +401,12 @@ class ClaudeParentAgent(ParentAgent):
         system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/historian") or "You are the Engineering Historian. Create a milestone document."
         prev_text = "\n\n---\n\n".join(ctx.previous_milestones[-2:]) if ctx.previous_milestones else "(none)"
         user = (
-            f"Task:\n{ctx.task[:4000]}\n\n"
-            f"Plan:\n{ctx.plan[:4000]}\n\n"
-            f"Diff:\n{ctx.diff[:6000]}\n\n"
-            f"Git log:\n{ctx.git_log[:2000]}\n\n"
-            f"Repo state:\n{ctx.repo_state[:2000]}\n\n"
-            f"Previous milestones (last 2):\n{prev_text[:4000]}\n\n"
+            f"Task:\n{ctx.task}\n\n"
+            f"Plan:\n{ctx.plan}\n\n"
+            f"Diff:\n{ctx.diff}\n\n"
+            f"Git log:\n{ctx.git_log}\n\n"
+            f"Repo state:\n{ctx.repo_state}\n\n"
+            f"Previous milestones (last 2):\n{prev_text}\n\n"
             f"Human feedback:\n{ctx.human_feedback or '(none)'}"
         )
         content = self._invoke(system, user)
@@ -451,8 +451,8 @@ class ClaudeParentAgent(ParentAgent):
         if not evidence or not evidence.events:
             return "(no tool evidence)"
         lines = []
-        for ev in evidence.events[-20:]:
-            lines.append(f"{ev.tool} {ev.input} -> exit {ev.exit_code}: {ev.output[:400]}")
+        for ev in evidence.events:
+            lines.append(f"{ev.tool} {ev.input} -> exit {ev.exit_code}: {ev.output}")
         return "\n".join(lines)
 
     def _review(self, task, result: AgentResult, project_diff: str = "") -> AgentResult:
@@ -526,24 +526,24 @@ class ClaudeParentAgent(ParentAgent):
             evidence_text = self._format_evidence(getattr(result, 'evidence', None))
             candidates = list(dict.fromkeys(list(task.files or []) + list(getattr(result, "artifacts", None) or [])))
             repo_evidence = ""
-            for rel in candidates[:8]:
+            for rel in candidates:
                 pp = self.root / rel
                 if pp.is_file():
                     try:
-                        repo_evidence += f"\n--- {rel} ---\n{pp.read_text(encoding='utf-8')[:2000]}\n"
+                        repo_evidence += f"\n--- {rel} ---\n{pp.read_text(encoding='utf-8')}\n"
                     except Exception:
                         repo_evidence += f"\n--- {rel} --- (unreadable)\n"
                 else:
                     repo_evidence += f"\n--- {rel} --- (not found)\n"
             try:
                 r = self.git.shell.run("git ls-files")
-                listing = r.stdout.strip()[:4000] if r.returncode == 0 else ""
+                listing = r.stdout.strip() if r.returncode == 0 else ""
             except Exception:
                 listing = ""
             repo_evidence += f"\n--- git ls-files ---\n{listing}\n" if listing else ""
             if task.acceptance:
                 repo_evidence += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in task.acceptance)
-            user = f"Task: {task.description}\nBaseline:\n{baseline_text}\nRepo evidence:\n{repo_evidence[:4000]}\nTool evidence:\n{evidence_text[:2000]}\nPlan excerpt: {ctx.plan[:1500]}\nResult: {result.message[:500]}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
+            user = f"Task: {task.description}\nBaseline:\n{baseline_text}\nRepo evidence:\n{repo_evidence}\nTool evidence:\n{evidence_text}\nPlan:\n{ctx.plan}\nResult:\n{result.message}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
             resp = client.messages.create(model=self.model or "claude-sonnet-4-20250514", max_tokens=512, system=system, messages=[{"role": "user", "content": user}])
             text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
             s = text.find("{")
@@ -562,7 +562,7 @@ class ClaudeParentAgent(ParentAgent):
     def generate_commit_message(self, diff: str, hint: str = "") -> str:
         p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
         system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/commit_message") or "Generate a commit message."
-        user = f"Diff:\n{diff[:6000]}\n\nHint:\n{hint[:1000]}" if hint else f"Diff:\n{diff[:6000]}"
+        user = f"Diff:\n{diff}\n\nHint:\n{hint}" if hint else f"Diff:\n{diff}"
         text = self._invoke(system, user)
         lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
         if lines:
@@ -589,7 +589,7 @@ class ClaudeParentAgent(ParentAgent):
             acc = "\n".join(f"- {a}" for a in (task.acceptance or [])) or "(none)"
             baseline_text = baseline_text or self._format_baseline(getattr(result, 'baseline', None))
             evidence_text = evidence_text or self._format_evidence(getattr(result, 'evidence', None))
-            user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nBaseline:\n{baseline_text}\nEvidence:\n{evidence_text[:3000]}\nPlan excerpt: {ctx.plan[:1500]}\nDiff:\n{diff[:3000]}\nResult: {result.message[:500]}"
+            user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nBaseline:\n{baseline_text}\nEvidence:\n{evidence_text}\nPlan:\n{ctx.plan}\nDiff:\n{diff}\nResult:\n{result.message}"
             resp = client.messages.create(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=512,
@@ -619,7 +619,7 @@ class ClaudeParentAgent(ParentAgent):
         if (base / "common" / "engineering_rules.md").exists():
             system = system + "\n\n" + (base / "common" / "engineering_rules.md").read_text(encoding="utf-8")
         milestones_text = "\n\n".join(f"## {m.name}\n{m.content}" for m in ctx.milestones)
-        user = f"Task:\n{task}\n\nRepo: {ctx.repository}\n\nCLAUDE.md:\n{ctx.instructions[:2000]}\n\nMilestones:\n{milestones_text[:2000]}"
+        user = f"Task:\n{task}\n\nRepo: {ctx.repository}\n\nCLAUDE.md:\n{ctx.instructions}\n\nMilestones:\n{milestones_text}"
         invoked = self._invoke(system, user)
         if invoked and not invoked.startswith("mock result"):
             s = invoked.find("{")
@@ -628,40 +628,90 @@ class ClaudeParentAgent(ParentAgent):
                 try:
                     import json as _pj
 
+                    from agent_system.plan_parser import is_valid_plan_data as _valid
+
                     cand = _pj.loads(invoked[s:e+1])
-                    if isinstance(cand, dict) and isinstance(cand.get("tasks"), list) and cand["tasks"]:
+                    if _valid(cand):
                         return _pj.dumps(cand, ensure_ascii=False)
                 except Exception:
                     pass
-            print("  [plan: invalid structured response, using structured fallback]")
+            print("  [plan: invalid structured response, preserving original task as fallback]")
         def _first_meaningful_line(t: str) -> str:
             for line in t.splitlines():
                 s = line.strip()
                 if not s or s.startswith("#"):
                     continue
-                return s[:300]
+                return s
             return "Implement feature"
         first_meaningful = _first_meaningful_line(task)
         import json as _jf
 
         import re as _re2
 
-        _files_hint = _re2.findall(r"[\w./-]+\.py", task)
+        _files_hint = list(dict.fromkeys(_re2.findall(r"[\w./-]+\.[A-Za-z0-9]+", task)))
+
+        def _extract_markdown_list_section(text: str, headings: set) -> list:
+            norm_headings = {h.lower().rstrip(":").strip() for h in headings}
+            all_known = {"acceptance", "acceptance criteria", "validation"}
+            lines = text.splitlines()
+            result: list[str] = []
+            in_section = False
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                h = stripped.lstrip("#").strip().rstrip(":").lower()
+                if h in norm_headings:
+                    in_section = True
+                    continue
+                if in_section:
+                    if re.match(r"^#{1,6}\s+", stripped):
+                        break
+                    nh = stripped.lstrip("#").strip().rstrip(":").lower()
+                    if nh in norm_headings:
+                        break
+                    if nh in all_known and nh not in norm_headings:
+                        break
+                    m = re.match(r"^[-*]\s+(.*)", stripped)
+                    if m:
+                        item = m.group(1).strip()
+                        if item:
+                            result.append(item)
+                        continue
+                    m2 = re.match(r"^\d+[\.\)]\s+(.*)", stripped)
+                    if m2:
+                        item = m2.group(1).strip()
+                        if item:
+                            result.append(item)
+                        continue
+                    if re.match(r"^-{2,}$", stripped) or re.match(r"^={2,}$", stripped):
+                        break
+                    m3 = re.match(r"^[-*]\s*$", stripped)
+                    if m3:
+                        continue
+            return result
+
+        _acceptance = _extract_markdown_list_section(task, {"acceptance", "acceptance criteria"})
+        _validation = _extract_markdown_list_section(task, {"validation"})
+
+        acceptance = _acceptance if _acceptance else ["Satisfy all requirements described in the original executable task."]
+        validation = _validation
+
         fallback = {
             "objective": first_meaningful,
-            "analysis": f"Task: {task.strip()[:500]} Repo: {ctx.repository or 'unknown'}",
+            "analysis": "Structured planning output was unavailable. The original task is preserved as one complete executable delivery unit so requirements are not lost.",
             "tasks": [
                 {
                     "id": "task001",
                     "role": "code",
                     "type": "implementation",
-                    "description": first_meaningful,
-                    "acceptance": ["Repository satisfies the task requirements", "Existing tests pass"],
-                    "validation": ["Run existing test suite"],
-                    "files": _files_hint[:3],
+                    "description": task.strip(),
+                    "acceptance": acceptance,
+                    "validation": validation,
+                    "files": _files_hint,
                 }
             ],
-            "risks": [],
+            "risks": ["Planner structured output was unavailable; Runtime preserved the original task without semantic reduction."],
         }
         return _jf.dumps(fallback, ensure_ascii=False)
 
@@ -684,10 +734,10 @@ class ClaudeParentAgent(ParentAgent):
             kwargs = dict(
                 model=self.model or "claude-sonnet-4-20250514",
                 max_tokens=2048,
-                messages=[{"role": "user", "content": user[:6000]}],
+                messages=[{"role": "user", "content": user}],
             )
             if system:
-                kwargs["system"] = system[:4000]
+                kwargs["system"] = system
             resp = client.messages.create(**kwargs)
             parts = []
             for block in resp.content:

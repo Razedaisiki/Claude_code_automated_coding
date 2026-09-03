@@ -28,6 +28,46 @@ def _norm_str_list(v) -> List[str]:
     return []
 
 
+def is_valid_plan_data(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        return False
+    if not tasks:
+        return False
+    if len(tasks) > 3:
+        return False
+    for task in tasks:
+        if not isinstance(task, dict):
+            return False
+        description = task.get("description")
+        if not isinstance(description, str) or not description.strip():
+            return False
+        acceptance = task.get("acceptance")
+        if not isinstance(acceptance, list) or not acceptance:
+            return False
+        if not all(isinstance(item, str) and item.strip() for item in acceptance):
+            return False
+        validation = task.get("validation")
+        if not isinstance(validation, list):
+            return False
+        if not all(isinstance(item, str) and item.strip() for item in validation):
+            return False
+        files = task.get("files", [])
+        if not isinstance(files, list):
+            return False
+        if not all(isinstance(item, str) and item.strip() for item in files):
+            return False
+        role = task.get("role", "code")
+        if role not in ("code", "test"):
+            return False
+        task_type = task.get("type", "implementation")
+        if task_type not in ("implementation", "verification", "optional"):
+            return False
+    return True
+
+
 def parse_plan_json(data: dict) -> List[AgentTask]:
     tasks_raw = data.get("tasks", []) if isinstance(data, dict) else []
     tasks: List[AgentTask] = []
@@ -113,63 +153,114 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
     id_re = re.compile(r"^(?:-\s*\*\*)?ID:\*?\*?\s*(.+)", re.IGNORECASE)
     type_re = re.compile(r"^(?:-\s*\*\*)?Type:\*?\*?\s*(.+)", re.IGNORECASE)
     desc_re = re.compile(r"^(?:-\s*\*\*)?Description:\*?\*?\s*(.+)", re.IGNORECASE)
+    acc_header_re = re.compile(r"^(?:-\s*\*\*)?(Acceptance(?:\sCriteria)?)\s*:", re.IGNORECASE)
+    val_header_re = re.compile(r"^(?:-\s*\*\*)?Validation\s*:", re.IGNORECASE)
 
     lines = plan_text.splitlines()
     i = 0
     in_tasks = False
-    pending_id = None
-    pending_type = None
+    current = None
+
+    def finalize_current():
+        nonlocal current, idx, tasks
+        if not current:
+            return
+        desc = str(current.get("description", "")).strip()
+        if not desc:
+            current = None
+            return
+        ttype = str(current.get("type", "implementation")).strip().lower()
+        if ttype not in ("implementation", "verification", "optional"):
+            ttype, _ = classify(desc)
+        tid = current.get("id") or f"task{idx+1:03d}"
+        tid = str(tid).strip().lower() or f"task{idx+1:03d}"
+        role = str(current.get("role", "")).strip().lower()
+        if role not in ("code", "test"):
+            role = "test" if re.search(r"\btest\b", desc, re.IGNORECASE) else "code"
+        files = _norm_str_list(current.get("files", []))
+        acceptance = list(current.get("acceptance", []))
+        validation = list(current.get("validation", []))
+        required = bool(current.get("required", True)) if ttype != "optional" else False
+        tasks.append(AgentTask(id=tid, role=role, description=desc, files=files, type=ttype, required=required, acceptance=acceptance, validation=validation))
+        idx += 1
+        current = None
 
     while i < len(lines):
         stripped = lines[i].strip()
 
         if re.match(r"^#{1,2}\s*Tasks\s*$", stripped, re.IGNORECASE):
+            finalize_current()
             in_tasks = True
             i += 1
             continue
         if in_tasks and re.match(r"^#{1,2}\s+(Objective|Analysis|Risks|Execution)", stripped):
+            finalize_current()
             break
         if not in_tasks:
             i += 1
             continue
 
-        if re.match(r"^(Acceptance Criteria|Acceptance|Validation)\s*:", stripped, re.IGNORECASE):
+        if current is not None and acc_header_re.match(stripped):
             i += 1
             while i < len(lines):
                 nxt = lines[i].strip()
-                if id_re.match(nxt) or desc_re.match(nxt) or type_re.match(nxt) or re.match(r"^#{1,2}\s+", nxt):
+                if not nxt:
+                    i += 1
+                    continue
+                if id_re.match(nxt) or desc_re.match(nxt) or type_re.match(nxt) or acc_header_re.match(nxt) or val_header_re.match(nxt) or re.match(r"^#{1,2}\s+", nxt):
                     break
-                i += 1
+                m_item = re.match(r"^[-*]\s+(.*)", nxt)
+                if m_item:
+                    item = m_item.group(1).strip()
+                    if item:
+                        current["acceptance"].append(item)
+                    i += 1
+                    continue
+                break
+            continue
+
+        if current is not None and val_header_re.match(stripped):
+            i += 1
+            while i < len(lines):
+                nxt = lines[i].strip()
+                if not nxt:
+                    i += 1
+                    continue
+                if id_re.match(nxt) or desc_re.match(nxt) or type_re.match(nxt) or acc_header_re.match(nxt) or val_header_re.match(nxt) or re.match(r"^#{1,2}\s+", nxt):
+                    break
+                m_item = re.match(r"^[-*]\s+(.*)", nxt)
+                if m_item:
+                    item = m_item.group(1).strip()
+                    if item:
+                        current["validation"].append(item)
+                    i += 1
+                    continue
+                break
             continue
 
         m_id = id_re.match(stripped)
         if m_id:
-            pending_id = m_id.group(1).strip().lower()
+            if current is not None:
+                finalize_current()
+            current = {"id": m_id.group(1).strip().lower(), "type": None, "description": "", "acceptance": [], "validation": [], "files": []}
             i += 1
             continue
         m_type = type_re.match(stripped)
         if m_type:
-            pending_type = m_type.group(1).strip().lower()
+            if current is None:
+                current = {"id": None, "type": None, "description": "", "acceptance": [], "validation": [], "files": []}
+            current["type"] = m_type.group(1).strip().lower()
             i += 1
             continue
         m_desc = desc_re.match(stripped)
         if m_desc:
-            desc = m_desc.group(1).strip()
-            ttype: TaskType = "implementation"
-            if pending_type in ("verification", "optional", "implementation"):
-                ttype = pending_type  # type: ignore
-            else:
-                ttype, _ = classify(desc)
-            tid = pending_id if pending_id else f"task{idx+1:03d}"
-            role = "test" if re.search(r"\btest\b", desc, re.IGNORECASE) else "code"
-            tasks.append(AgentTask(id=tid, role=role, description=desc, type=ttype))
-            idx += 1
-            pending_id = None
-            pending_type = None
+            if current is None:
+                current = {"id": None, "type": None, "description": "", "acceptance": [], "validation": [], "files": []}
+            current["description"] = m_desc.group(1).strip()
             i += 1
             continue
 
-        if in_tasks and not id_re.match(stripped) and not type_re.match(stripped) and not desc_re.match(stripped):
+        if in_tasks and current is not None and not id_re.match(stripped) and not type_re.match(stripped) and not desc_re.match(stripped):
             if re.match(r"^- \*\*(Acceptance|Validation)", stripped):
                 i += 1
                 while i < len(lines):
@@ -182,6 +273,8 @@ def parse_plan(plan_text: str) -> List[AgentTask]:
                 i += 1
                 continue
         i += 1
+
+    finalize_current()
 
     if not tasks:
         for line in plan_text.splitlines():
