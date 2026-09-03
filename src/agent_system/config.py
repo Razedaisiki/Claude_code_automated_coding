@@ -1,52 +1,21 @@
-import json
-import os
-from pathlib import Path
-from typing import Optional
+from agent_system.providers.anthropic.config import (
+    load_claude_settings,
+    resolve_anthropic_api_key as resolve_api_key,
+    resolve_anthropic_base_url as resolve_base_url,
+    resolve_anthropic_model as resolve_model,
+)
+from agent_system.providers.anthropic.config import (
+    resolve_anthropic_api_key,
+    resolve_anthropic_base_url,
+    resolve_anthropic_model,
+)
 
-
-def load_claude_settings() -> dict:
-    p = Path.home() / ".claude" / "settings.json"
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data.get("env") or {}
-    except Exception:
-        return {}
-
-
-def resolve_model() -> Optional[str]:
-    for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"):
-        v = os.environ.get(k)
-        if v:
-            return v
-    env = load_claude_settings()
-    for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"):
-        v = env.get(k)
-        if v:
-            return v
-    return None
-
-
-def resolve_api_key() -> Optional[str]:
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        v = os.environ.get(k)
-        if v:
-            return v
-    env = load_claude_settings()
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        v = env.get(k)
-        if v:
-            return v
-    return None
-
-
-def resolve_base_url() -> Optional[str]:
-    v = os.environ.get("ANTHROPIC_BASE_URL")
-    if v:
-        return v
-    env = load_claude_settings()
-    v = env.get("ANTHROPIC_BASE_URL")
-    if v:
-        return v
-    return None
+__all__ = [
+    "load_claude_settings",
+    "resolve_model",
+    "resolve_api_key",
+    "resolve_base_url",
+    "resolve_anthropic_model",
+    "resolve_anthropic_api_key",
+    "resolve_anthropic_base_url",
+]

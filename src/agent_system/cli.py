@@ -78,10 +78,16 @@ def cmd_milestone(args):
         return
     feedback = getattr(args, "feedback", None)
     print("Generating milestone...")
-    from agent_system.agents.claude_parent import ClaudeParentAgent
+    from agent_system.composition import build_default_workflow
 
-    parent = ClaudeParentAgent(root=root)
-    result = parent.create_milestone(feedback=feedback) if hasattr(parent, "create_milestone") else None
+    wf = build_default_workflow(root=root)
+    # wf.tech_lead for real workflow, wf._parent for mock
+    if hasattr(wf, "tech_lead") and hasattr(wf.tech_lead, "create_milestone"):
+        result = wf.tech_lead.create_milestone(feedback=feedback)
+    elif hasattr(wf, "create_milestone"):
+        result = wf.create_milestone(feedback=feedback)
+    else:
+        result = None
     if result:
         print(f"Milestone created: {result}")
     else:

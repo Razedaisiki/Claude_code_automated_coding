@@ -4,29 +4,22 @@ from agent_system.supervisor.session import SessionManager
 from agent_system.supervisor.state import StateManager
 
 
-def _default_parent(root: Path):
-    import os
+def _default_workflow(root: Path):
+    from agent_system.composition import build_default_workflow
 
-    if os.getenv("XXX_MOCK") == "1":
-        from agent_system.agents.mock_parent import MockParent
-
-        return MockParent()
-    from agent_system.config import resolve_api_key
-
-    api_key = resolve_api_key()
-    if not api_key:
-        raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use XXX_MOCK=1 for mock mode.")
-    from agent_system.agents.claude_parent import ClaudeParentAgent
-
-    return ClaudeParentAgent(root=root)
+    return build_default_workflow(root)
 
 
 class Supervisor:
-    def __init__(self, root: Path = None, parent=None):
+    def __init__(self, root: Path = None, workflow=None, parent=None):
         self.root = root or Path.cwd()
         self.state = StateManager(self.root)
         self.sessions = SessionManager(self.root)
-        self.parent = parent or _default_parent(self.root)
+        # handle both workflow and parent for compat: if parent and not workflow: workflow = parent
+        if parent is not None and workflow is None:
+            workflow = parent
+        self.workflow = workflow or _default_workflow(self.root)
+        self.parent = self.workflow  # alias for compat
 
     def _finalize_parent_result(self, result):
         if hasattr(result, "status") and result.status == "FAILED":
@@ -87,10 +80,7 @@ class Supervisor:
             print("Preparing pre-workflow snapshot...")
             diff = changes.diff
             try:
-                from agent_system.agents.claude_parent import ClaudeParentAgent
-
-                parent = ClaudeParentAgent(root=self.root)
-                msg = parent.generate_commit_message(diff)
+                msg = self.workflow.generate_commit_message(diff)
             except Exception:
                 msg = "chore: preserve existing changes"
             out = git.commit(msg)
@@ -109,7 +99,7 @@ class Supervisor:
 
         task = session["task"]
         try:
-            result = self.parent.run(task)
+            result = self.workflow.run(task)
             return self._finalize_parent_result(result)
         except KeyboardInterrupt:
             print("Workflow interrupted; checkpoint preserved for resume.")
@@ -142,7 +132,7 @@ class Supervisor:
         print(f"State {self.state.load()['status']} session {sid}")
         task = session["task"]
         try:
-            result = self.parent.run(task)
+            result = self.workflow.run(task)
             return self._finalize_parent_result(result)
         except KeyboardInterrupt:
             print("Workflow interrupted; checkpoint preserved for resume.")
