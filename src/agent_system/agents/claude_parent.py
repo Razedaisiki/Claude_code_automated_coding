@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -376,20 +377,20 @@ class ClaudeParentAgent(ParentAgent):
                 data = json.loads(text[start:end])
                 decision = data.get("decision", "")
                 if decision in ("APPROVED", "NO_CODE_CHANGE", "APPROVED_WITH_NOTE"):
-                    return {"decision": "APPROVED_WITH_NOTE" if decision == "NO_CODE_CHANGE" else decision, "reason": data.get("reason", text[:800]), "classification": data.get("classification", ""), "correction": data.get("correction", "")}
+                    return {"decision": "APPROVED_WITH_NOTE" if decision == "NO_CODE_CHANGE" else decision, "reason": data.get("reason", text), "classification": data.get("classification", ""), "correction": data.get("correction", "")}
                 if decision == "CHANGES_REQUIRED":
                     corr = data.get("correction", {})
                     if isinstance(corr, dict) and corr:
-                        return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": corr, "classification": data.get("classification", "CHANGE_RELATED")}
-                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:800]), "correction": {}, "classification": "CHANGE_RELATED"}
+                        return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text), "correction": corr, "classification": data.get("classification", "CHANGE_RELATED")}
+                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text), "correction": {}, "classification": "CHANGE_RELATED"}
         except Exception:
             pass
         if "APPROVE" in text.upper() or "CI_APPROVED" in text.upper():
-            return {"decision": "APPROVED", "reason": text[:800]}
+            return {"decision": "APPROVED", "reason": text}
         low = text.lower()
         if "existing_project" in low or "infrastructure" in low:
-            return {"decision": "APPROVED_WITH_NOTE", "reason": text[:800], "classification": text[:300]}
-        return {"decision": "CHANGES_REQUIRED", "reason": text[:800], "correction": {"description": text[:500]}}
+            return {"decision": "APPROVED_WITH_NOTE", "reason": text, "classification": text}
+        return {"decision": "CHANGES_REQUIRED", "reason": text, "correction": {"description": text}}
 
     def create_milestone(self, feedback: str = None) -> str:
         from datetime import datetime, timezone
@@ -552,9 +553,9 @@ class ClaudeParentAgent(ParentAgent):
                 data = json.loads(text[s:e])
                 dec = data.get("decision", "")
                 if dec in ("ALREADY_SATISFIED", "SATISFIED", "APPROVED", "NO_CHANGE"):
-                    return {"decision": "ALREADY_SATISFIED", "reason": data.get("reason", text[:500]), "evidence": data.get("evidence", [])}
+                    return {"decision": "ALREADY_SATISFIED", "reason": data.get("reason", text), "evidence": data.get("evidence", [])}
                 if dec in ("CHANGES_REQUIRED", "REQUIRED"):
-                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text[:500]), "correction": data.get("correction", "")}
+                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text), "correction": data.get("correction", "")}
         except Exception:
             return None
         return None
@@ -605,7 +606,7 @@ class ClaudeParentAgent(ParentAgent):
                 if dec in ("APPROVED", "ALREADY_SATISFIED", "SATISFIED"):
                     return {"pass": True, "reason": data.get("reason", ""), "decision": dec}
                 if dec in ("CHANGES_REQUIRED", "REJECTED", "FAILED"):
-                    return {"pass": False, "reason": data.get("reason", text[:500]), "correction": data.get("correction", ""), "decision": dec}
+                    return {"pass": False, "reason": data.get("reason", text), "correction": data.get("correction", ""), "decision": dec}
                 if "pass" in data:
                     return data
         except Exception:
@@ -646,9 +647,8 @@ class ClaudeParentAgent(ParentAgent):
         first_meaningful = _first_meaningful_line(task)
         import json as _jf
 
-        import re as _re2
-
-        _files_hint = list(dict.fromkeys(_re2.findall(r"[\w./-]+\.[A-Za-z0-9]+", task)))
+        FILE_HINT_RE = re.compile(r"(?:[\w.-]+/)*[\w.-]+\.(?:py|ts|tsx|js|jsx|go|rs|java|yml|yaml|json|toml|md|sh)")
+        _files_hint = list(dict.fromkeys(FILE_HINT_RE.findall(task)))
 
         def _extract_markdown_list_section(text: str, headings: set) -> list:
             norm_headings = {h.lower().rstrip(":").strip() for h in headings}
