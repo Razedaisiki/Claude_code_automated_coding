@@ -11,8 +11,10 @@ def init_workspace(root: Path = None):
 
     from agent_system.supervisor.state import CURRENT_SCHEMA_VERSION
 
-    state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.3", "schema_version": CURRENT_SCHEMA_VERSION}
-    (agent_dir / "state.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    state_file = agent_dir / "state.json"
+    if not state_file.exists():
+        state = {"status": "INITIALIZED", "session_id": None, "prompt_version": "v0.3", "schema_version": CURRENT_SCHEMA_VERSION}
+        state_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
     cfg = agent_dir / "config.yaml"
     if cfg.exists():

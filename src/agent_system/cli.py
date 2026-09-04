@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 from agent_system import __version__
 
@@ -12,16 +13,30 @@ def cmd_init(args):
 
 def cmd_run(args):
     from agent_system.supervisor.supervisor import Supervisor
+    from agent_system.supervisor.state import StateManager
 
     sup = Supervisor()
-    sup.start()
+    result = sup.start()
+    state = StateManager().load()
+    status = state.get("status", "")
+    if status == "FAILED":
+        sys.exit(1)
+    if isinstance(result, object) and getattr(result, "status", None) == "FAILED":
+        sys.exit(1)
 
 
 def cmd_resume(args):
     from agent_system.supervisor.supervisor import Supervisor
+    from agent_system.supervisor.state import StateManager
 
     sup = Supervisor()
-    sup.resume()
+    result = sup.resume()
+    state = StateManager().load()
+    status = state.get("status", "")
+    if status == "FAILED":
+        sys.exit(1)
+    if isinstance(result, object) and getattr(result, "status", None) == "FAILED":
+        sys.exit(1)
 
 
 def cmd_remote(args):
@@ -75,13 +90,12 @@ def cmd_milestone(args):
     state = StateManager(root).load()
     if state.get("status") != "COMPLETED":
         print(f"Cannot create milestone. Current state: {state.get('status', 'UNKNOWN')}")
-        return
+        sys.exit(1)
     feedback = getattr(args, "feedback", None)
     print("Generating milestone...")
     from agent_system.composition import build_default_workflow
 
     wf = build_default_workflow(root=root)
-    # wf.tech_lead for real workflow, wf._parent for mock
     if hasattr(wf, "tech_lead") and hasattr(wf.tech_lead, "create_milestone"):
         result = wf.tech_lead.create_milestone(feedback=feedback)
     elif hasattr(wf, "create_milestone"):
@@ -92,6 +106,7 @@ def cmd_milestone(args):
         print(f"Milestone created: {result}")
     else:
         print("Milestone generation not yet implemented")
+        sys.exit(1)
 
 
 def main():
