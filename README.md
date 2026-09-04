@@ -54,9 +54,8 @@ Each task either results in **`CHANGED`** (commit) or **`SATISFIED`** (already s
 - Python >= 3.8
 - Git
 - Claude Code >= 2.1.248
-- `bubblewrap` / `bwrap`
-- `socat`
 - Anthropic credentials
+- On Linux: `bubblewrap` (provides `bwrap`) and `socat` for the Claude Code sandbox
 
 For GitHub delivery (`workflow remote gh`) additionally:
 
@@ -70,6 +69,137 @@ Optional Anthropic configuration:
 
 - `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL`
 - `ANTHROPIC_BASE_URL`
+
+### Linux sandbox dependencies
+
+On Linux, Workflow's Claude Code sandbox requires `bwrap` and `socat`. The Debian/Ubuntu package `bubblewrap` installs the `bwrap` executable (package name `bubblewrap` ≠ executable `bwrap`).
+
+#### With sudo — recommended
+
+```bash
+sudo apt update
+```
+
+```bash
+sudo apt install bubblewrap socat
+```
+
+Verify:
+
+```bash
+bwrap --version
+```
+
+```bash
+socat -V
+```
+
+#### Without sudo — Debian/Ubuntu
+
+This option uses user-local extraction via `apt-get`/`dpkg-deb`. It requires those tools and is not universal; administrators may restrict package access.
+
+Create local directories:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+```
+
+```bash
+mkdir -p "$HOME/.local/opt/workflow-deps"
+```
+
+Create a temporary download directory:
+
+```bash
+mkdir -p "$HOME/.cache/workflow-deps"
+```
+
+```bash
+cd "$HOME/.cache/workflow-deps"
+```
+
+Download packages without installing system-wide:
+
+```bash
+apt-get download bubblewrap
+```
+
+```bash
+apt-get download socat
+```
+
+Extract into the user-local prefix:
+
+```bash
+dpkg-deb -x ./bubblewrap_*.deb "$HOME/.local/opt/workflow-deps"
+```
+
+```bash
+dpkg-deb -x ./socat_*.deb "$HOME/.local/opt/workflow-deps"
+```
+
+Expose executables on `PATH`:
+
+```bash
+ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/bwrap" "$HOME/.local/bin/bwrap"
+```
+
+```bash
+ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/socat" "$HOME/.local/bin/socat"
+```
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+To make this permanent, add the same line to `~/.bashrc` or `~/.zshrc` (do not edit automatically).
+
+Verify:
+
+```bash
+command -v bwrap
+```
+
+```bash
+command -v socat
+```
+
+```bash
+bwrap --version
+```
+
+```bash
+socat -V
+```
+
+Expected paths:
+
+```text
+/home/<user>/.local/bin/bwrap
+/home/<user>/.local/bin/socat
+```
+
+Check shared-library dependencies:
+
+```bash
+ldd "$(command -v bwrap)"
+```
+
+```bash
+ldd "$(command -v socat)"
+```
+
+```bash
+ldd "$(command -v bwrap)" | grep "not found"
+```
+
+```bash
+ldd "$(command -v socat)" | grep "not found"
+```
+
+If nothing is printed by `grep "not found"`, no missing libraries were detected. If libraries are missing, the extracted package alone is insufficient — ask the administrator to provide the runtime libraries or use another compatible environment. Do not attempt manual recursive dependency extraction here.
+
+> Installing `bwrap` is not always sufficient. Bubblewrap relies on Linux user namespaces. If the host or administrator disables unprivileged user namespaces, a user-local `bwrap` cannot override that kernel/security policy.
 
 ---
 
@@ -100,12 +230,17 @@ workflow --help
 
 ```bash
 mkdir my-project
+```
+
+```bash
 cd my-project
+```
 
+```bash
 git init
-git add .
-git commit -m "initial project state"
+```
 
+```bash
 workflow init
 ```
 
@@ -123,7 +258,7 @@ Then:
 workflow run
 ```
 
-Local delivery is the default (`workflow remote local`). No `.agent` editing is required.
+Local delivery is the default (`workflow remote local`). If the project has existing changes when `workflow run` starts, they are preserved in a pre-workflow snapshot commit. No `.agent` editing is required.
 
 ---
 
@@ -150,11 +285,13 @@ Do not edit `.agent/state.json` manually.
 
 `workflow init` is non-destructive and safe to run again:
 
-- Missing directories/files are created; existing ones are preserved.
-- `state.json` is created only if absent — existing resumable state is not reset.
-- `config.yaml` is created only if absent.
-- `TASK.md` is created only if absent.
-- Existing `legacy .agent/prompts` is not deleted; new `.agent/prompts` is not created.
+- Existing runtime state is not reset.
+- Existing `TASK.md` content is preserved.
+- Existing user configuration is preserved.
+- Workflow may add or migrate required metadata in `.agent/config.yaml` (e.g. `delivery`, `prompt_version`).
+- Missing workspace files/directories may be created.
+- New `.agent/prompts/` directories are not created.
+- Existing legacy `.agent/prompts/` directories are not deleted automatically.
 
 There is no implicit workspace reset command.
 
