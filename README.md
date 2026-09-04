@@ -11,5 +11,5 @@ pip install -e .
 ## Usage
 
 ```bash
-xxx --version
+workflow --version
 ```

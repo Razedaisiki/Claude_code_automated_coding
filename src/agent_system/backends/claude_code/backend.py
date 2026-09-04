@@ -11,7 +11,7 @@ from agent_system.runtime.task_baseline import capture_task_baseline
 
 
 def _is_mock_mode() -> bool:
-    return os.getenv("XXX_MOCK") == "1"
+    return os.getenv("WORKFLOW_MOCK") == "1"
 
 
 class ClaudeCodeBackend:
@@ -52,7 +52,7 @@ class ClaudeCodeBackend:
         from agent_system.backends.claude_code.config import resolve_claude_code_api_key
         api_key = resolve_claude_code_api_key()
         if not api_key:
-            raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use XXX_MOCK=1 for mock mode.")
+            raise RuntimeError("API key not configured. Set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN or use WORKFLOW_MOCK=1 for mock mode.")
 
         if baseline is None:
             baseline = self._capture_baseline(task)

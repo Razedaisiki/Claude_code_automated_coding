@@ -45,7 +45,7 @@ def build_default_workflow(
     root = Path(root or Path.cwd())
     if reasoning_model is None and model is not None:
         reasoning_model = model
-    if os.getenv("XXX_MOCK") == "1":
+    if os.getenv("WORKFLOW_MOCK") == "1":
         reasoning = _MockReasoningProvider()
         tech_lead = TechLead(root=root, reasoning=reasoning)
         coding_backend = _MockCodingBackend()

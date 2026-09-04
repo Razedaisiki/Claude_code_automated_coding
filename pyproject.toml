@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-xxx = "agent_system.cli:main"
+workflow = "agent_system.cli:main"
 
 [tool.setuptools.package-data]
 agent_system = ["prompts/**/*.md"]

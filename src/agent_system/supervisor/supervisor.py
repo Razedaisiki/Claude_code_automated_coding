@@ -62,7 +62,7 @@ class Supervisor:
         if not git.is_workspace_repo():
             print("Cannot start workflow: workspace must be an initialized Git repository.")
             print(f"Expected Git root: {self.root.resolve()}")
-            print("Initialize Git in this project before running xxx (e.g. git init).")
+            print("Initialize Git in this project before running workflow (e.g. git init).")
             self.state.update(status="FAILED")
             print(f"State {self.state.load()['status']}")
             return

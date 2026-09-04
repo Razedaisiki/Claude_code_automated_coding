@@ -61,7 +61,7 @@ def cmd_remote(args):
         cfg.save(root)
         print(f"Delivery mode set to: {action}")
         return
-    print("Usage: xxx remote <local|gh|status>")
+    print("Usage: workflow remote <local|gh|status>")
 
 
 def cmd_milestone(args):
@@ -95,7 +95,7 @@ def cmd_milestone(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="xxx", description="agent-system cli")
+    parser = argparse.ArgumentParser(prog="workflow", description="agent-system cli")
     parser.add_argument("--version", action="store_true", help="show version")
 
     sub = parser.add_subparsers(dest="command")
@@ -121,7 +121,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print(f"agent-system {__version__}")
+        print(f"workflow {__version__}")
         return
 
     if hasattr(args, "func"):

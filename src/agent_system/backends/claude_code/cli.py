@@ -258,7 +258,7 @@ class ClaudeCodeCLI:
         order: List[str] = []
         tid_to_index: dict = {}
         completed_by_tid: dict = {}
-        debug = os.getenv("XXX_DEBUG_AGENT_TURNS") == "1"
+        debug = os.getenv("WORKFLOW_DEBUG_AGENT_TURNS") == "1"
         events: List[ToolEvent] = []
         result_text = ""
         returncode = 0
