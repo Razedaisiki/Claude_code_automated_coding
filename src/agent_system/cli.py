@@ -59,7 +59,8 @@ def cmd_remote(args):
         print(f"  remote: {'detected' if git.has_remote() else 'not configured'}")
         if git.has_remote():
             print(f"  url: {git.remote_url()}")
-        print(f"  push: user managed")
+        push_label = "managed by Workflow" if cfg.mode == "gh" else "skipped by Workflow"
+        print(f"  push: {push_label}")
         print("")
         print("GitHub:")
         has_gh = gh._has_gh()
@@ -110,7 +111,7 @@ def cmd_milestone(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="workflow", description="agent-system cli")
+    parser = argparse.ArgumentParser(prog="workflow", description="Deterministic delivery runtime for coding agents")
     parser.add_argument("--version", action="store_true", help="show version")
 
     sub = parser.add_subparsers(dest="command")

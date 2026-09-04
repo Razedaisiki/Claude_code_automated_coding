@@ -22,7 +22,7 @@ class WorkflowOrchestrator:
         return load_context(self.root)
 
     def run(self, task: str) -> AgentResult:
-        print("Starting Claude Parent")
+        print("Starting workflow")
         ctx = load_context(self.root)
         print("  Loading context")
         if ctx.task:
@@ -120,5 +120,5 @@ class WorkflowOrchestrator:
             if res.status == "FAILED":
                 return res
 
-        print("Parent finished")
+        print("Workflow finished")
         return AgentResult(status="SUCCESS", message="plan executed", artifacts=[str(plan_file)], next_action="DONE")
