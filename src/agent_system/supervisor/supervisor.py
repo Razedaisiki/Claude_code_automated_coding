@@ -67,7 +67,8 @@ class Supervisor:
             print(f"State {self.state.load()['status']}")
             return
         try:
-            self.state.validate()
+            from agent_system.runtime.checkpoint import Checkpoint as _CP
+            _CP(self.root).validate()
         except RuntimeError as e:
             print(f"State validation failed: {e}")
             self.state.update(status="FAILED")
@@ -111,7 +112,8 @@ class Supervisor:
 
     def resume(self):
         try:
-            self.state.validate()
+            from agent_system.runtime.checkpoint import Checkpoint as _CP2
+            _CP2(self.root).validate()
         except RuntimeError as e:
             print(f"Cannot resume: {e}")
             self.state.update(status="FAILED")

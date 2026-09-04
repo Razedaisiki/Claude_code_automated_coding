@@ -9,17 +9,24 @@ from agent_system.orchestration.workflow import WorkflowOrchestrator
 from agent_system.runtime.task_runtime import TaskRuntime
 
 class _MockReasoningProvider:
+    PLAN_MARKER = "executable engineering plan"
+    COMMIT_MARKER = "commit message"
+    CI_REVIEW_MARKER = "analyzing ci results"
+
     def complete(self, *, system: str, user: str, max_tokens: int, timeout: int) -> str:
         low_system = (system or "").lower()
-        if "ci" in low_system and "review" in low_system:
-            return '{"decision":"APPROVED","reason":"mock ci approved"}'
-        if "review" in low_system and "already satisfied" in low_system:
+        low_user = (user or "").lower()
+        # satisfaction review: empty diff path — user contains the satisfaction prompt suffix
+        if "already satisfies all acceptance criteria" in low_user:
             return '{"decision":"ALREADY_SATISFIED","reason":"mock satisfied","evidence":[]}'
-        if "review" in low_system:
-            return '{"decision":"APPROVED","reason":"mock approved"}'
-        if "commit message" in low_system or "commit_message" in low_system:
+        if self.CI_REVIEW_MARKER in low_system:
+            return '{"decision":"APPROVED","reason":"mock ci approved"}'
+        if self.COMMIT_MARKER in low_system:
             return "chore: mock commit"
-        return '{"tasks":[{"id":"task001","description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
+        if self.PLAN_MARKER in low_system:
+            return '{"tasks":[{"id":"task001","description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
+        # default: normal review
+        return '{"decision":"APPROVED","reason":"mock approved"}'
 
 
 class _MockCodingBackend:

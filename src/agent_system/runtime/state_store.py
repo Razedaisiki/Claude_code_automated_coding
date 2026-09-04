@@ -63,5 +63,7 @@ class StateManager:
         return state
 
     def validate(self) -> None:
-        from agent_system.runtime.checkpoint import VALIDATE_STATE as _V
-        _V(self.root)
+        raise RuntimeError(
+            "StateManager.validate() is deprecated — use Checkpoint(root).validate() directly. "
+            "Kept for supervisor/state.py compat only; import Checkpoint for Runtime validation."
+        )

@@ -143,10 +143,6 @@ class Checkpoint:
         s = self.state.load()
         _validate_state_dict(s)
 
-def VALIDATE_STATE(root) -> None:
-    from agent_system.runtime.state_store import StateManager as _SM
-    _validate_state_dict(_SM(root).load())
-
 def _validate_state_dict(s: dict) -> None:
     delivery = s.get("delivery") or {}
     phase = delivery.get("phase")
