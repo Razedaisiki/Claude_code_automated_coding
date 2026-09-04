@@ -33,7 +33,7 @@ def init_workspace(root: Path = None):
                 cfg.write_text(text.replace("v0.2", "v0.3"), encoding="utf-8")
     else:
         cfg.write_text(
-            "version: 1.0.0\nmodel: mock\nprompt_version: v0.3\ndelivery:\n  mode: local\n",
+            "version: 1.0.1\nmodel: mock\nprompt_version: v0.3\ndelivery:\n  mode: local\n",
             encoding="utf-8",
         )
 

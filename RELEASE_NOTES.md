@@ -1,3 +1,12 @@
+# Workflow 1.0.1
+
+## Changes from 1.0.0
+
+- Add architecture diagrams (`docs/diagrams/`) and reference them in README
+- Remove unused `claude-agent-sdk` dependency; document SDK-free installation
+
+---
+
 # Workflow 1.0.0
 
 Workflow is a deterministic delivery runtime for coding agents.

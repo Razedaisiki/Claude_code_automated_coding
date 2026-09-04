@@ -337,6 +337,18 @@ Workflow validates Git control state around backend execution and fails closed i
 
 ---
 
+## Architecture
+
+Architecture diagrams are available in [`docs/diagrams/`](docs/diagrams/):
+
+- `system-architecture.png` — overall Workflow architecture
+- `task-runtime.png` — TaskRuntime state machine
+- `lifecycle.png` — delivery lifecycle
+- `commit-ownership.png` — commit ownership
+- `run.png` — run flow
+
+---
+
 ## Review and task outcomes
 
 - **`CHANGED`** — approved project changes were committed.
