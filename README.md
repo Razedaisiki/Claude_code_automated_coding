@@ -108,7 +108,7 @@ mkdir -p "$HOME/.local/bin"
 mkdir -p "$HOME/.local/opt/workflow-deps"
 ```
 
-Create a temporary download directory:
+Create a local download directory:
 
 ```bash
 mkdir -p "$HOME/.cache/workflow-deps"
@@ -116,6 +116,10 @@ mkdir -p "$HOME/.cache/workflow-deps"
 
 ```bash
 cd "$HOME/.cache/workflow-deps"
+```
+
+```bash
+rm -f "$HOME/.cache/workflow-deps"/bubblewrap_*.deb "$HOME/.cache/workflow-deps"/socat_*.deb
 ```
 
 Download packages without installing system-wide:
@@ -338,7 +342,7 @@ Workflow validates Git control state around backend execution and fails closed i
 - **`CHANGED`** — approved project changes were committed.
 - **`SATISFIED`** — repository already satisfied the task; no commit is created for that task.
 
-A Git diff is evidence, not the definition of completion. Empty diff with `SATISFIED` is valid; `SATISFIED` with a dirty working tree is rejected.
+A Git diff is evidence, not the definition of completion. Empty diff with `SATISFIED` is valid; `SATISFIED` with pending project changes is rejected.
 
 ---
 
@@ -426,7 +430,7 @@ Workflow is validated through deterministic probes and end-to-end delivery demos
 - Multi-file Service
 - CI Resume
 - CI Correction
-- CI Bootstrap (when present)
+- CI Bootstrap
 
 ---
 
@@ -434,7 +438,7 @@ Workflow is validated through deterministic probes and end-to-end delivery demos
 
 **`claude` not found** — install Claude Code `>= 2.1.248` and ensure `claude` is on `PATH`.
 
-**Sandbox dependencies missing** — install `bubblewrap` (`bwrap`) and `socat`.
+**Linux sandbox dependencies missing** — install `bubblewrap` (`bwrap`) and `socat` (see Linux sandbox dependencies).
 
 **Anthropic API key not configured** — set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` (or provide via `~/.claude/settings.json`).
 
