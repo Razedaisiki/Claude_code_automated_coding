@@ -4,7 +4,7 @@ from typing import Dict, List, Literal, Optional
 
 TaskType = Literal["implementation", "verification", "optional"]
 TaskRole = Literal["code", "test"]
-TaskOutcomeStatus = Literal["CHANGED", "SATISFIED", "FAILED"]
+TaskOutcomeStatus = Literal["CHANGED", "SATISFIED", "VERIFIED", "SKIPPED", "FAILED"]
 
 
 @dataclass
