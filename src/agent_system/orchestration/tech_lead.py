@@ -287,6 +287,13 @@ class TechLead:
 
         acceptance = _acceptance if _acceptance else ["Satisfy all requirements described in the original executable task."]
         validation = _validation
+        # Normalize validation commands: prefer python3 when python is unavailable
+        try:
+            import shutil as _shutil2
+            if _shutil2.which("python") is None and _shutil2.which("python3") is not None:
+                validation = [re.sub(r"(^|\s)python(\s|$)", r"\1python3\2", v) for v in validation]
+        except Exception:
+            pass
 
         fallback = {
             "objective": first_meaningful,

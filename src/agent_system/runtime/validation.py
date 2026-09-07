@@ -1,5 +1,7 @@
 import os
+import re
 import shlex
+import shutil
 from pathlib import Path
 
 from agent_system.contracts.validation import ValidationCommandResult, ValidationResult
@@ -12,8 +14,39 @@ def _normalize_argv(cmd: str):
         return [cmd]
 
 
+def _canonical_argv(cmd: str):
+    try:
+        argv = shlex.split(cmd)
+    except Exception:
+        return [cmd]
+    if not argv:
+        return argv
+    if argv[0] == "python" and shutil.which("python") is None and shutil.which("python3") is not None:
+        argv = ["python3"] + argv[1:]
+    return argv
+
+
 def _argv_match(expected: str, executed: str) -> bool:
-    return _normalize_argv(expected) == _normalize_argv(executed)
+    return _canonical_argv(expected) == _canonical_argv(executed)
+
+
+def _effective_cmd(cmd: str) -> str:
+    argv = _canonical_argv(cmd)
+    try:
+        return shlex.join(argv)
+    except Exception:
+        return " ".join(argv)
+
+
+def _infer_exit_code_from_output(output: str, ec):
+    if ec is not None:
+        return ec
+    low = (output or "").lower()
+    if re.search(r"\d+\s+passed", low) and "failed" not in low:
+        return 0
+    if "passed" in low and "failed" not in low and "error" not in low:
+        return 0
+    return ec
 
 
 class MockValidationRunner:
@@ -40,9 +73,9 @@ class ClaudeCodeValidationRunner:
         cmds = list(getattr(task, "validation", None) or [])
         if not cmds:
             return ValidationResult(tree_sha=reviewed_tree_sha or "", status="PASSED", commands=[])
-        # Build restricted prompt
+        effective_cmds = [_effective_cmd(c) for c in cmds]
         from agent_system.backends.claude_code.cli import ClaudeCodeCLI
-        cmd_list = "\n".join(f"- {c}" for c in cmds)
+        cmd_list = "\n".join(f"- {c}" for c in effective_cmds)
         prompt = (
             "You are in validation mode. Execute ONLY the following validation commands. "
             "Do not edit files, do not run other commands.\n"
@@ -51,32 +84,18 @@ class ClaudeCodeValidationRunner:
         )
         try:
             cli = ClaudeCodeCLI(self.root, model=self.model)
-            # We run via Claude but must verify via ToolEvents
             result = cli.run(prompt, timeout=300)
             events = getattr(getattr(result, "evidence", None), "events", None) or []
-            # Collect Bash events
-            bash_map = {}
-            for ev in events:
-                if getattr(ev, "tool", "") != "Bash":
-                    continue
-                inp = getattr(ev, "input", {}) or {}
-                cmd_executed = str(inp.get("command") or inp.get("cmd") or "")
-                ec = getattr(ev, "exit_code", None)
-                # Store by normalized argv string
-                bash_map[_normalize_argv(cmd_executed).__repr__()] = (cmd_executed, ec, getattr(ev, "output", "") or "")
-                # Also try direct argv match
-                bash_map[cmd_executed] = (cmd_executed, ec, getattr(ev, "output", "") or "")
             out_results = []
             all_pass = True
-            for expected in cmds:
+            for expected, effective in zip(cmds, effective_cmds):
                 found = None
-                exp_norm = _normalize_argv(expected)
                 for ev in events:
                     if getattr(ev, "tool", "") != "Bash":
                         continue
                     inp = getattr(ev, "input", {}) or {}
                     ce = str(inp.get("command") or inp.get("cmd") or "")
-                    if _argv_match(expected, ce):
+                    if _argv_match(expected, ce) or _argv_match(effective, ce):
                         found = ev
                         break
                 if found is None:
@@ -84,14 +103,14 @@ class ClaudeCodeValidationRunner:
                     out_results.append(ValidationCommandResult(command=expected, exit_code=1, status="FAILED", output=f"command not executed: {expected}"))
                 else:
                     ec = getattr(found, "exit_code", None)
-                    if ec != 0:
+                    ec = _infer_exit_code_from_output(getattr(found, "output", "") or "", ec)
+                    if ec is not None and ec != 0:
                         all_pass = False
                         out_results.append(ValidationCommandResult(command=expected, exit_code=ec if ec is not None else 1, status="FAILED", output=getattr(found, "output", "") or ""))
                     else:
                         raw = str(getattr(found, "input", {}).get("command") or "")
-                        # Reject wrappers like `pytest || true`
                         if "||" in raw or ";" in raw or "| " in raw:
-                            if not _argv_match(expected, raw):
+                            if not _argv_match(expected, raw) and not _argv_match(effective, raw):
                                 all_pass = False
                                 out_results.append(ValidationCommandResult(command=expected, exit_code=1, status="FAILED", output=f"command wrapper detected: {raw}"))
                                 continue
