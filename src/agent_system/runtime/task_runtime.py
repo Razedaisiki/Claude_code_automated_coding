@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from agent_system.agents.models import AgentResult, AgentTask
@@ -7,13 +9,14 @@ from agent_system.runtime.git import Git
 
 MAX_REVIEW_ATTEMPTS = 3
 MAX_CI_CORRECTIONS = 3
-
+MAX_REVIEW_TEXT_BYTES = 512 * 1024
 
 class TaskRuntime:
-    def __init__(self, root: Path, *, coding_backend, tech_lead):
+    def __init__(self, root: Path, *, coding_backend, tech_lead, project_context=None):
         self.root = Path(root).resolve() if root else Path.cwd().resolve()
         self.coding_backend = coding_backend
         self.tech_lead = tech_lead
+        self.project_context = project_context
         self.git = Git(self.root)
 
     def _resolve_active_task(self, original: AgentTask, delivery: dict) -> AgentTask:
@@ -31,40 +34,98 @@ class TaskRuntime:
             )
         return original
 
-    def run_task(self, original: AgentTask, task_index: int, resume_current: bool = False) -> AgentResult:
+    def _relevant_files_union(self, active: AgentTask, original: AgentTask, snap, candidate_artifacts):
+        files = set()
+        for f in (original.files or []):
+            if isinstance(f, str) and f.strip():
+                files.add(f.strip())
+        for f in (active.files or []):
+            if isinstance(f, str) and f.strip():
+                files.add(f.strip())
+        for f in (snap.changed_files or []):
+            if f and f.strip() and ".agent/" not in f:
+                files.add(f.strip())
+        for a in (candidate_artifacts or []):
+            if isinstance(a, str) and a.strip() and "/" in a and not a.strip().startswith("/"):
+                if ".agent/" not in a:
+                    files.add(a.strip())
+        return sorted(files)
+
+    def _build_relevant_file_evidence(self, tree_sha: str, paths: list) -> list:
+        evidences = []
+        total = 0
+        for rel in paths:
+            rel = rel.strip()
+            if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+                continue
+            meta = self.git.read_tree_path(tree_sha, rel)
+            if meta is None:
+                evidences.append({"path": rel, "kind": "missing", "missing": True})
+                continue
+            mode = meta.get("mode", "")
+            sha = meta.get("sha", "")
+            if mode == "120000":
+                data = self.git.cat_blob(sha)
+                try:
+                    target = data.decode("utf-8", errors="strict").strip()
+                except Exception:
+                    target = data.decode("utf-8", errors="replace").strip()
+                evidences.append({"path": rel, "kind": "symlink", "symlink_target": target, "blob_sha": sha})
+                continue
+            size = self.git.blob_size(sha)
+            data = self.git.cat_blob(sha)
+            binary = self.git.is_binary_blob(data)
+            if binary:
+                evidences.append({"path": rel, "kind": "file", "blob_sha": sha, "size": size, "binary": True})
+                continue
+            try:
+                text = data.decode("utf-8")
+            except Exception:
+                text = data.decode("utf-8", errors="replace")
+            if total + len(data) > MAX_REVIEW_TEXT_BYTES:
+                raise RuntimeError(f"Review package exceeds supported context size: {total + len(data)} > {MAX_REVIEW_TEXT_BYTES}.")
+            total += len(data)
+            evidences.append({"path": rel, "kind": "file", "blob_sha": sha, "size": size, "binary": False, "content": text})
+        if total > MAX_REVIEW_TEXT_BYTES:
+            raise RuntimeError(f"Review package exceeds supported context size: {total} > {MAX_REVIEW_TEXT_BYTES}.")
+        return evidences
+
+    def run_task(self, original: AgentTask, task_index: int, resume_current: bool = False, project_context=None) -> AgentResult:
         from agent_system.agents.code_agent import CodeAgent
         from agent_system.delivery import DeliveryConfig
         from agent_system.runtime.checkpoint import Checkpoint, TaskPhase
-
         ckpt = Checkpoint(self.root)
         if not resume_current:
             ckpt.begin_task(task_index, original.id)
-
+        ctx = project_context or self.project_context
         while True:
             delivery = (ckpt.state.load().get("delivery") or {})
             phase = delivery.get("phase") or TaskPhase.EXECUTING.value
             active = self._resolve_active_task(original, delivery)
-
             if phase == TaskPhase.TASK_COMPLETED.value:
                 return AgentResult(status="SUCCESS", message=f"task {original.id} completed", artifacts=[])
-
             if phase == TaskPhase.EXECUTING.value:
-                # Handle verification/test no-code tasks
                 if active.role == "test" or active.type == "verification":
                     if not active.validation:
-                        return AgentResult(status="FAILED", message=f"verification task {active.id} has no validation commands", artifacts=[])
-                    # Ensure clean workspace
+                        return AgentResult(status="FAILED", message=f"verification task {active.id} has no validation", artifacts=[])
                     snap0 = self.git.capture_tree_snapshot()
                     if snap0.has_changes:
                         return AgentResult(status="FAILED", message=f"verification task {active.id} requires clean workspace: {snap0.changed_files}", artifacts=snap0.changed_files)
                     base = self.git.head_sha()
                     tree_pre = self.git.snapshot_worktree_tree() or self.git.head_tree_sha()
-                    ckpt.enter_validating(reviewed_tree_sha=tree_pre, base_commit_sha=base)
-                    delivery = (ckpt.state.load().get("delivery") or {})
-                    phase = delivery.get("phase")
+                    from agent_system.runtime.review_store import ReviewArtifactStore
+                    state = ckpt.state.load()
+                    sid = state.get("session_id") or ""
+                    attempt = int(delivery.get("review_attempt", 1) or 1)
+                    candidate_obj = {"task_id": active.id, "original_task_id": original.id, "review_attempt": attempt, "reviewed_tree_sha": tree_pre, "base_commit_sha": base or "", "base_tree_sha": self.git.head_tree_sha() if base else "", "changed_files": [], "project_diff": "", "result_status": "SUCCESS", "result_message": "verification", "result_artifacts": [], "execution_status": "COMPLETED", "stop_reason": None, "execution_evidence": None}
+                    if sid:
+                        store = ReviewArtifactStore(self.root, sid)
+                        cand_ref = store.write_candidate(active.id, attempt, candidate_obj)
+                    else:
+                        cand_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(candidate_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                    ckpt.enter_validating(reviewed_tree_sha=tree_pre, base_commit_sha=base or "", candidate_ref=cand_ref)
                     continue
                 from agent_system.agents.models import task_baseline_from_dict, task_baseline_to_dict
-
                 baseline = task_baseline_from_dict(delivery.get("task_baseline"))
                 if baseline is None:
                     from agent_system.runtime.task_baseline import capture_task_baseline
@@ -85,7 +146,6 @@ class TaskRuntime:
                         result = CodeAgent(backend=self.coding_backend, root=self.root).execute(exec_task, baseline=baseline)
                     except BaseException as exc:
                         exc_to_raise = exc
-                        # capture after state even on interrupt
                         try:
                             git_after = capture_git_control_state(self.root)
                             violation = validate_unchanged(git_before, git_after)
@@ -112,113 +172,144 @@ class TaskRuntime:
                     return AgentResult(status="FAILED", message=f"unsupported task role: {exec_task.role}", artifacts=[])
                 if getattr(result, "execution_status", "COMPLETED") == "ERROR" or result.status in ("FAILED", "INCOMPLETE"):
                     return AgentResult(status="FAILED", message=result.message, artifacts=result.artifacts)
-                # Capture tree snapshot
                 snap = self.git.capture_tree_snapshot()
                 from agent_system.agents.models import execution_evidence_to_dict
-                ckpt.enter_validating(reviewed_tree_sha=snap.tree_sha, base_commit_sha=snap.base_commit_sha, validation_snapshot=None)
+                from agent_system.runtime.review_store import ReviewArtifactStore
+                state = ckpt.state.load()
+                sid = state.get("session_id") or ""
+                attempt = int(delivery.get("review_attempt", 1) or 1)
+                candidate_obj = {"task_id": active.id, "original_task_id": original.id, "review_attempt": attempt, "reviewed_tree_sha": snap.tree_sha, "base_commit_sha": snap.base_commit_sha or "", "base_tree_sha": snap.base_tree_sha or "", "changed_files": snap.changed_files, "project_diff": snap.diff, "result_status": getattr(result, "status", "SUCCESS") or "SUCCESS", "result_message": getattr(result, "message", "") or "", "result_artifacts": list(getattr(result, "artifacts", None) or []), "execution_status": getattr(result, "execution_status", "COMPLETED") or "COMPLETED", "stop_reason": getattr(result, "stop_reason", None), "execution_evidence": execution_evidence_to_dict(getattr(result, "evidence", None))}
+                if sid:
+                    store = ReviewArtifactStore(self.root, sid)
+                    cand_ref = store.write_candidate(active.id, attempt, candidate_obj)
+                else:
+                    cand_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(candidate_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                ckpt.enter_validating(reviewed_tree_sha=snap.tree_sha, base_commit_sha=snap.base_commit_sha or "", candidate_ref=cand_ref)
                 continue
-
             if phase == TaskPhase.VALIDATING.value:
                 reviewed_tree = delivery.get("reviewed_tree_sha") or ""
                 base_sha = delivery.get("base_commit_sha") or ""
-                # Re-snapshot to get diff/files
-                snap = self.git.capture_tree_snapshot()
-                # If verification task, run validation directly
-                if active.role == "test" or active.type == "verification":
-                    if not active.validation:
-                        return AgentResult(status="FAILED", message=f"verification task {active.id} has no validation", artifacts=[])
-                    # Check still clean before validation
-                    if snap.tree_sha != reviewed_tree and reviewed_tree:
-                        # tree changed before validation
-                        return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
-                    from agent_system.runtime.validation import get_validation_runner
-                    runner = get_validation_runner(self.root)
-                    before_tree = self.git.snapshot_worktree_tree() or ""
-                    vres = runner.validate(active, reviewed_tree or before_tree)
-                    after_tree = self.git.snapshot_worktree_tree() or ""
-                    if after_tree != (reviewed_tree or before_tree):
-                        return AgentResult(status="FAILED", message="Validation mutated project tree; failing closed.", artifacts=[])
-                    snap2 = self.git.capture_tree_snapshot()
-                    vsnap = {"tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "checks": [{"instruction": c.instruction, "status": c.status, "evidence": c.evidence[:2000]} for c in vres.checks], "summary": vres.summary, "tool_events": vres.tool_events}
-                    if vres.status != "PASSED":
-                        return AgentResult(status="FAILED", message=f"verification validation failed for {active.id}", artifacts=[])
-                    ckpt.update_delivery(validation_snapshot=vsnap)
-                    ckpt.enter_reviewing(review_snapshot={"result_status": "SUCCESS", "result_message": "verification", "result_artifacts": [], "commit_message": "", "outcome_status": "VERIFIED", "execution_status": "COMPLETED", "stop_reason": None, "evidence": None, "project_diff": snap2.diff, "changed_files": snap2.changed_files, "project_fingerprint": snap2.tree_sha, "active_task_id": active.id, "reviewed_tree_sha": reviewed_tree or snap2.tree_sha, "base_commit_sha": base_sha or snap2.base_commit_sha, "validation_snapshot": vsnap})
-                    # Fall through to REVIEWING
-                    continue
-                if active.validation:
-                    cur_tree = snap.tree_sha
-                    if reviewed_tree and cur_tree != reviewed_tree:
-                        return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
-                    from agent_system.runtime.validation import get_validation_runner
-                    runner = get_validation_runner(self.root)
-                    before_tree = self.git.snapshot_worktree_tree() or ""
-                    vres = runner.validate(active, reviewed_tree or before_tree)
-                    after_tree = self.git.snapshot_worktree_tree() or ""
-                    if after_tree != (reviewed_tree or before_tree):
-                        return AgentResult(status="FAILED", message="Validation mutated project tree; failing closed.", artifacts=[])
-                    vsnap = {"tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "checks": [{"instruction": c.instruction, "status": c.status, "evidence": c.evidence[:2000]} for c in vres.checks], "summary": vres.summary, "tool_events": vres.tool_events}
-                    ckpt.update_delivery(validation_snapshot=vsnap)
-                    if vres.status != "PASSED":
-                        return AgentResult(status="FAILED", message=f"validation failed for {active.id}", artifacts=[])
-                # Build review snapshot and enter REVIEWING
-                from agent_system.agents.models import execution_evidence_from_dict, task_baseline_from_dict
-                # Retrieve last result snapshot if any? For normal flow we need to reconstruct
-                # Use current snap for diff
-                snapsnap = delivery.get("review_snapshot") or {}
-                # If we have no prior result snapshot, use minimal
-                result_status = snapsnap.get("result_status", "SUCCESS")
-                result_message = snapsnap.get("result_message", "executed")
-                result_artifacts = snapsnap.get("result_artifacts", [])
-                # Also try from EXECUTING's last evidence baseline
-                baseline = task_baseline_from_dict(delivery.get("task_baseline"))
-                vsnap2 = delivery.get("validation_snapshot")
-                # Build evidence dict
-                evidence_dict = snapsnap.get("evidence")
-                ckpt.enter_reviewing(review_snapshot={"result_status": result_status, "result_message": result_message, "result_artifacts": result_artifacts, "commit_message": snapsnap.get("commit_message", "") or "", "outcome_status": snapsnap.get("outcome_status", "") or "", "execution_status": snapsnap.get("execution_status", "COMPLETED") or "COMPLETED", "stop_reason": snapsnap.get("stop_reason"), "evidence": evidence_dict, "project_diff": snap.diff, "changed_files": list(snap.changed_files or []), "project_fingerprint": snap.tree_sha, "active_task_id": active.id, "reviewed_tree_sha": reviewed_tree or snap.tree_sha, "base_commit_sha": base_sha or snap.base_commit_sha, "validation_snapshot": vsnap2})
-                continue
-
-            if phase == TaskPhase.REVIEWING.value:
-                # Re-validate tree identity
-                current_snap = self.git.capture_tree_snapshot()
-                snap = delivery.get("review_snapshot") or {}
-                reviewed_tree = snap.get("reviewed_tree_sha") or ""
-                if reviewed_tree and current_snap.tree_sha != reviewed_tree:
+                cand_ref = delivery.get("candidate_ref")
+                if not cand_ref:
+                    return AgentResult(status="FAILED", message="VALIDATING requires candidate_ref", artifacts=[])
+                try:
+                    state = ckpt.state.load()
+                    sid = state.get("session_id") or ""
+                    if sid and isinstance(cand_ref, dict) and cand_ref.get("path"):
+                        from agent_system.runtime.review_store import ReviewArtifactStore
+                        store = ReviewArtifactStore(self.root, sid)
+                        candidate = store.load_candidate(cand_ref)
+                    else:
+                        candidate = cand_ref if isinstance(cand_ref, dict) and "reviewed_tree_sha" in cand_ref else {}
+                except Exception as e:
+                    return AgentResult(status="FAILED", message=f"candidate artifact verification failed: {e}", artifacts=[])
+                if not isinstance(candidate, dict) or not candidate.get("reviewed_tree_sha"):
+                    return AgentResult(status="FAILED", message="candidate artifact invalid", artifacts=[])
+                if candidate.get("reviewed_tree_sha") != reviewed_tree:
+                    return AgentResult(status="FAILED", message="candidate tree mismatch", artifacts=[])
+                if candidate.get("task_id") != active.id:
+                    return AgentResult(status="FAILED", message="candidate task_id mismatch", artifacts=[])
+                cur_snap = self.git.capture_tree_snapshot()
+                if cur_snap.tree_sha != reviewed_tree:
                     return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
-                from agent_system.agents.models import execution_evidence_from_dict, task_baseline_from_dict
-                commit_message = snap.get("commit_message", "")
-                outcome_status = snap.get("outcome_status", "")
-                baseline = task_baseline_from_dict(delivery.get("task_baseline"))
-                evidence = execution_evidence_from_dict(snap.get("evidence"))
-                tmp_result = AgentResult(status=snap.get("result_status", "SUCCESS"), message=snap.get("result_message", ""), artifacts=snap.get("result_artifacts", []), baseline=baseline, evidence=evidence, execution_status=snap.get("execution_status", "COMPLETED") or "COMPLETED", stop_reason=snap.get("stop_reason"))
-                if outcome_status:
-                    from agent_system.agents.models import TaskOutcome
-                    tmp_result.outcome = TaskOutcome(task_id=active.id, status=outcome_status)
-                project_diff = snap.get("project_diff", "")
-                vsnap = snap.get("validation_snapshot") or delivery.get("validation_snapshot")
-                # Optional/skipped handling before LLM
+                vsnap_obj = None
+                val_ref = None
+                if active.validation:
+                    from agent_system.runtime.validation import get_validation_runner
+                    runner = get_validation_runner(self.root)
+                    before_tree = self.git.snapshot_worktree_tree() or ""
+                    vres = runner.validate(active, reviewed_tree or before_tree)
+                    after_tree = self.git.snapshot_worktree_tree() or ""
+                    if after_tree != (reviewed_tree or before_tree):
+                        return AgentResult(status="FAILED", message="Validation mutated project tree; failing closed.", artifacts=[])
+                    vsnap_obj = {"task_id": active.id, "tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "checks": [{"instruction": c.instruction, "status": c.status, "evidence": c.evidence[:4000]} for c in vres.checks], "summary": vres.summary, "tool_events": vres.tool_events}
+                    if sid:
+                        from agent_system.runtime.review_store import ReviewArtifactStore
+                        store = ReviewArtifactStore(self.root, sid)
+                        attempt2 = int(candidate.get("review_attempt", 1) or 1)
+                        val_ref = store.write_validation(active.id, attempt2, vsnap_obj)
+                    else:
+                        val_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(vsnap_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                    ckpt.update_delivery(validation_ref=val_ref)
+                    if vres.status != "PASSED":
+                        return AgentResult(status="FAILED", message=f"validation failed for {active.id}: {vres.summary[:200]}", artifacts=[])
+                # Handle verification no-commit path
+                if active.role == "test" and active.type == "verification":
+                    if vsnap_obj is None or vsnap_obj.get("status") != "PASSED":
+                        return AgentResult(status="FAILED", message="verification validation failed", artifacts=[])
+                    if cur_snap.has_changes:
+                        return AgentResult(status="FAILED", message="verification task has pending changes", artifacts=cur_snap.changed_files)
+                    relevant_paths = self._relevant_files_union(active, original, cur_snap, candidate.get("result_artifacts", []))
+                    try:
+                        relevant_files = self._build_relevant_file_evidence(reviewed_tree, relevant_paths)
+                    except RuntimeError as e:
+                        return AgentResult(status="FAILED", message=str(e), artifacts=[])
+                    pkg_obj = {"package_version": 1, "session_id": sid, "task_id": active.id, "original_task_id": original.id, "review_attempt": int(candidate.get("review_attempt", 1) or 1), "reviewed_tree_sha": reviewed_tree, "base_commit_sha": base_sha or "", "base_tree_sha": candidate.get("base_tree_sha", "") or "", "changed_files": cur_snap.changed_files, "project_diff": cur_snap.diff, "relevant_files": relevant_files, "candidate": candidate, "validation": vsnap_obj, "task_baseline": delivery.get("task_baseline")}
+                    if sid:
+                        from agent_system.runtime.review_store import ReviewArtifactStore as _Store2
+                        store = _Store2(self.root, sid)
+                        pkg_ref = store.write_review_package(active.id, int(candidate.get("review_attempt", 1) or 1), pkg_obj)
+                    else:
+                        pkg_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(pkg_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                    ckpt.enter_reviewing(review_package_ref=pkg_ref, reviewed_tree_sha=reviewed_tree, base_commit_sha=base_sha or "")
+                    continue
+                # Normal code path: build ReviewPackage
+                relevant_paths = self._relevant_files_union(active, original, cur_snap, candidate.get("result_artifacts", []))
+                try:
+                    relevant_files = self._build_relevant_file_evidence(reviewed_tree, relevant_paths)
+                except RuntimeError as e:
+                    return AgentResult(status="FAILED", message=str(e), artifacts=[])
+                pkg_obj = {"package_version": 1, "session_id": sid, "task_id": active.id, "original_task_id": original.id, "review_attempt": int(candidate.get("review_attempt", 1) or 1), "reviewed_tree_sha": reviewed_tree, "base_commit_sha": base_sha or "", "base_tree_sha": candidate.get("base_tree_sha", "") or "", "changed_files": cur_snap.changed_files, "project_diff": cur_snap.diff, "relevant_files": relevant_files, "candidate": candidate, "validation": vsnap_obj, "task_baseline": delivery.get("task_baseline")}
+                if sid:
+                    from agent_system.runtime.review_store import ReviewArtifactStore
+                    store = ReviewArtifactStore(self.root, sid)
+                    pkg_ref = store.write_review_package(active.id, int(candidate.get("review_attempt", 1) or 1), pkg_obj)
+                else:
+                    pkg_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(pkg_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                ckpt.enter_reviewing(review_package_ref=pkg_ref, reviewed_tree_sha=reviewed_tree, base_commit_sha=base_sha or "")
+                continue
+            if phase == TaskPhase.REVIEWING.value:
+                pkg_ref = delivery.get("review_package_ref")
+                if not pkg_ref:
+                    return AgentResult(status="FAILED", message="REVIEWING requires review_package_ref", artifacts=[])
+                try:
+                    state = ckpt.state.load()
+                    sid = state.get("session_id") or ""
+                    if sid and isinstance(pkg_ref, dict) and pkg_ref.get("path"):
+                        from agent_system.runtime.review_store import ReviewArtifactStore
+                        store = ReviewArtifactStore(self.root, sid)
+                        pkg = store.load_review_package(pkg_ref)
+                    else:
+                        pkg = pkg_ref if isinstance(pkg_ref, dict) and "reviewed_tree_sha" in pkg_ref else {}
+                except Exception as e:
+                    return AgentResult(status="FAILED", message=f"review package verification failed: {e}", artifacts=[])
+                if not isinstance(pkg, dict) or not pkg.get("reviewed_tree_sha"):
+                    return AgentResult(status="FAILED", message="review package invalid", artifacts=[])
+                if pkg.get("reviewed_tree_sha") != delivery.get("reviewed_tree_sha"):
+                    return AgentResult(status="FAILED", message="review package tree mismatch", artifacts=[])
+                cur_snap = self.git.capture_tree_snapshot()
+                if cur_snap.tree_sha != pkg.get("reviewed_tree_sha"):
+                    return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
                 if active.type == "optional":
-                    # If no diff and not satisfied, allow SKIPPED if clean
-                    if not project_diff.strip() and not snap.get("changed_files"):
-                        if not current_snap.has_changes:
+                    if not pkg.get("project_diff", "").strip() and not pkg.get("changed_files"):
+                        if not cur_snap.has_changes:
                             ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="SKIPPED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
                             return AgentResult(status="SUCCESS", message=f"task {active.id} skipped", artifacts=[])
                 if active.role == "test" and active.type == "verification":
-                    # Already validated
-                    if vsnap and vsnap.get("status") == "PASSED":
-                        if current_snap.has_changes:
-                            return AgentResult(status="FAILED", message="verification task has pending changes", artifacts=current_snap.changed_files)
+                    validation = pkg.get("validation")
+                    if validation and validation.get("status") == "PASSED":
+                        if cur_snap.has_changes:
+                            return AgentResult(status="FAILED", message="verification task has pending changes", artifacts=cur_snap.changed_files)
                         ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="VERIFIED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
                         return AgentResult(status="SUCCESS", message=f"task {active.id} verified", artifacts=[])
                     return AgentResult(status="FAILED", message="verification validation failed", artifacts=[])
-                review = self.tech_lead.review(active, tmp_result, project_diff)
-                if commit_message and not getattr(review, "commit_message", ""):
-                    review.commit_message = commit_message
+                review = self.tech_lead.review_package(active, pkg, ctx or project_context)
                 if review.status == "SUCCESS":
                     if getattr(review, "outcome", None) and review.outcome.status == "SATISFIED":
                         changes_now = self.git.capture_tree_snapshot()
                         if changes_now.has_changes:
                             return AgentResult(status="FAILED", message=f"Runtime invariant violation: SATISFIED task has pending project changes: {changes_now.changed_files}", artifacts=changes_now.changed_files)
+                        ckpt.update_delivery(review_decision={"review_package_sha256": pkg_ref.get("sha256", ""), "reviewed_tree_sha": pkg.get("reviewed_tree_sha"), "decision": "ALREADY_SATISFIED", "reason": review.message})
                         ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome="SATISFIED", commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
                         return AgentResult(status="SUCCESS", message=review.message, artifacts=review.artifacts)
                     if getattr(review, "outcome", None) and review.outcome.status in ("VERIFIED", "SKIPPED"):
@@ -226,43 +317,57 @@ class TaskRuntime:
                         changes_now = self.git.capture_tree_snapshot()
                         if changes_now.has_changes:
                             return AgentResult(status="FAILED", message=f"{out} task has pending changes", artifacts=changes_now.changed_files)
+                        ckpt.update_delivery(review_decision={"review_package_sha256": pkg_ref.get("sha256", ""), "reviewed_tree_sha": pkg.get("reviewed_tree_sha"), "decision": out, "reason": review.message})
                         ckpt.mark_task_completed(task_index=task_index, task_id=original.id, outcome=out, commit_sha=None, push_status="SKIPPED", ci_status="SKIPPED")
                         return AgentResult(status="SUCCESS", message=review.message, artifacts=review.artifacts)
                     if not review.commit_message:
-                        return AgentResult(status="FAILED", message="Approved changed task has no commit message", artifacts=tmp_result.artifacts)
-                    # Create commit intent
+                        return AgentResult(status="FAILED", message="Approved changed task has no commit message", artifacts=[])
                     snap2 = self.git.capture_tree_snapshot()
-                    if snap2.tree_sha != reviewed_tree:
+                    if snap2.tree_sha != pkg.get("reviewed_tree_sha"):
                         return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
                     head_ref = self.git.head_ref()
                     if not head_ref:
                         return AgentResult(status="FAILED", message="detached HEAD not supported", artifacts=[])
-                    commit_intent = {"tree_sha": snap2.tree_sha, "parent_sha": snap2.base_commit_sha, "message": review.commit_message, "head_ref": head_ref, "pending_commit_sha": None}
+                    commit_intent = {"tree_sha": snap2.tree_sha, "parent_sha": snap2.base_commit_sha, "message": review.commit_message, "head_ref": head_ref, "pending_commit_sha": None, "review_package_sha256": pkg_ref.get("sha256", "")}
+                    ckpt.update_delivery(review_decision={"review_package_sha256": pkg_ref.get("sha256", ""), "reviewed_tree_sha": pkg.get("reviewed_tree_sha"), "decision": "APPROVED", "reason": review.message, "commit_message": review.commit_message})
                     ckpt.enter_committing(pending_commit_message=review.commit_message, pre_commit_sha=snap2.base_commit_sha, commit_intent=commit_intent)
                     continue
                 attempt = int(delivery.get("review_attempt", 1))
                 if attempt >= MAX_REVIEW_ATTEMPTS:
                     return review
-                ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=review.message, review_snapshot=None)
+                ckpt.update_delivery(review_decision={"review_package_sha256": pkg_ref.get("sha256", ""), "reviewed_tree_sha": pkg.get("reviewed_tree_sha"), "decision": "CHANGES_REQUIRED", "reason": review.message})
+                ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=review.message, candidate_ref=None, validation_ref=None, review_package_ref=None, reviewed_tree_sha=None, base_commit_sha=None, review_decision=None)
                 continue
-
             if phase == TaskPhase.COMMITTING.value:
                 commit_intent = delivery.get("commit_intent") or {}
+                review_decision = delivery.get("review_decision") or {}
+                if review_decision.get("review_package_sha256") and commit_intent.get("review_package_sha256") and review_decision.get("review_package_sha256") != commit_intent.get("review_package_sha256"):
+                    return AgentResult(status="FAILED", message="commit provenance mismatch", artifacts=[])
+                pkg_ref = delivery.get("review_package_ref")
+                if pkg_ref:
+                    try:
+                        state = ckpt.state.load()
+                        sid = state.get("session_id") or ""
+                        if sid and isinstance(pkg_ref, dict) and pkg_ref.get("path"):
+                            from agent_system.runtime.review_store import ReviewArtifactStore
+                            store = ReviewArtifactStore(self.root, sid)
+                            pkg = store.load_review_package(pkg_ref)
+                            if pkg.get("reviewed_tree_sha") != commit_intent.get("tree_sha"):
+                                return AgentResult(status="FAILED", message="commit provenance tree mismatch", artifacts=[])
+                    except Exception as e:
+                        return AgentResult(status="FAILED", message=f"commit provenance verification failed: {e}", artifacts=[])
                 pending = delivery.get("pending_commit_message", "") or commit_intent.get("message", "")
                 pre_sha = delivery.get("pre_commit_sha") or commit_intent.get("parent_sha", "")
                 head_ref = commit_intent.get("head_ref") or self.git.head_ref()
                 tree_sha = commit_intent.get("tree_sha") or ""
                 pending_sha = commit_intent.get("pending_commit_sha") or ""
                 cur_sha = self.git.head_sha()
-                # Crash recovery: if pending_commit_sha exists and HEAD == pending, success
                 if pending_sha and cur_sha == pending_sha:
-                    # verify
                     ct = self.git.commit_tree_sha(pending_sha)
                     if ct != tree_sha:
                         return AgentResult(status="FAILED", message="commit tree mismatch on recovery", artifacts=[])
                     self.git.sync_index_to_head()
                     ckpt.update_delivery(commit_sha=pending_sha)
-                    # freeze push target if not already
                     snap = self.git.capture_tree_snapshot()
                     target = self.git.resolve_push_target(commit_sha=pending_sha)
                     if target is None:
@@ -275,7 +380,6 @@ class TaskRuntime:
                         return AgentResult(status="SUCCESS", message=f"committed {pending_sha[:7]}", artifacts=[])
                     ckpt.enter_pushing(commit_sha=pending_sha, push_target=push_target)
                     continue
-                # If pending exists but HEAD still parent, try to advance
                 if pending_sha and cur_sha == pre_sha:
                     if pending_sha:
                         ct = self.git.commit_tree_sha(pending_sha)
@@ -291,7 +395,6 @@ class TaskRuntime:
                                 push_target = {"commit_sha": target.commit_sha, "local_ref": target.local_ref, "remote": target.remote, "remote_url": target.remote_url, "target_ref": target.target_ref} if target else delivery.get("push_target")
                                 ckpt.enter_pushing(commit_sha=pending_sha, push_target=push_target)
                                 continue
-                # If HEAD already advanced externally with correct message/tree
                 if cur_sha and pre_sha and cur_sha != pre_sha:
                     parent = self.git.commit_parent(cur_sha)
                     subj = self.git.commit_subject(cur_sha)
@@ -317,9 +420,8 @@ class TaskRuntime:
                     tree_sha = snap.tree_sha
                     head_ref = self.git.head_ref()
                     pre_sha = snap.base_commit_sha
-                    commit_intent = {"tree_sha": tree_sha, "parent_sha": pre_sha, "message": pending, "head_ref": head_ref, "pending_commit_sha": None}
+                    commit_intent = {"tree_sha": tree_sha, "parent_sha": pre_sha, "message": pending, "head_ref": head_ref, "pending_commit_sha": None, "review_package_sha256": delivery.get("review_decision", {}).get("review_package_sha256", "")}
                     ckpt.update_delivery(commit_intent=commit_intent, pre_commit_sha=pre_sha)
-                # Phase 1: commit-tree
                 if not pending_sha:
                     pending_sha = self.git.create_commit_object(tree_sha, pre_sha, pending)
                     if not pending_sha:
@@ -329,12 +431,10 @@ class TaskRuntime:
                         return AgentResult(status="FAILED", message="commit tree mismatch", artifacts=[])
                     commit_intent["pending_commit_sha"] = pending_sha
                     ckpt.update_delivery(commit_intent=commit_intent, pending_commit_sha=pending_sha)
-                # Phase 2: update-ref
                 ok = self.git.update_ref(head_ref, pending_sha, pre_sha) if pre_sha else self.git.update_ref(head_ref, pending_sha)
                 if not ok:
                     return AgentResult(status="FAILED", message="update-ref failed (branch changed externally?)", artifacts=[])
                 self.git.sync_index_to_head()
-                # verify HEAD
                 new_head = self.git.head_sha()
                 if new_head != pending_sha:
                     return AgentResult(status="FAILED", message="HEAD not at pending commit after update-ref", artifacts=[])
@@ -346,7 +446,6 @@ class TaskRuntime:
                     return AgentResult(status="SUCCESS", message=f"committed {pending_sha[:7]}", artifacts=[])
                 ckpt.enter_pushing(commit_sha=pending_sha, push_target=push_target)
                 continue
-
             if phase == TaskPhase.PUSHING.value:
                 sha = delivery.get("commit_sha", "")
                 if not sha:
@@ -355,7 +454,6 @@ class TaskRuntime:
                 if not push_target_dict:
                     return AgentResult(status="FAILED", message="PUSHING requires push_target", artifacts=[])
                 from agent_system.runtime.git import PushTarget as _PT
-                # Validate frozen target hasn't drifted
                 head = self.git.head_sha()
                 if head != sha:
                     return AgentResult(status="FAILED", message=f"PUSHING HEAD mismatch: {head} != {sha}", artifacts=[])
@@ -377,11 +475,9 @@ class TaskRuntime:
                 if push_res["status"] == "SUCCESS":
                     ckpt.enter_ci_discovery(commit_sha=sha)
                     continue
-                # In GH mode, any push failure is terminal FAILED
                 if cfg.mode == "gh":
                     return AgentResult(status="FAILED", message=f"push failed: {push_res.get('message','')[:200]}", artifacts=[])
                 return AgentResult(status="FAILED", message=f"push failed: {push_res.get('message','')[:200]}", artifacts=[])
-
             if phase == TaskPhase.CI_DISCOVERY.value:
                 sha = delivery.get("commit_sha", "")
                 disc = self._ci_discover(sha)
@@ -392,7 +488,6 @@ class TaskRuntime:
                     return AgentResult(status="SUCCESS", message="CI not detected", artifacts=[])
                 ckpt.enter_waiting_ci(ci_runs=disc.get("runs", []), commit_sha=sha, frozen_ci_runs=disc.get("runs", []))
                 continue
-
             if phase == TaskPhase.WAITING_CI.value:
                 sha = delivery.get("commit_sha", "")
                 runs = delivery.get("frozen_ci_runs") or delivery.get("ci_runs") or []
@@ -415,9 +510,7 @@ class TaskRuntime:
                 ckpt.enter_ci_review(ci_status="CI_FAILED", ci_failed_logs=ci_res.get("failed_logs", ""), ci_runs=ci_res.get("runs", runs), commit_sha=sha)
                 ckpt.update_delivery(ci_runs=ci_res.get("runs", runs))
                 continue
-
             if phase == TaskPhase.CI_REVIEW.value:
-                # Refresh CI status if rerun succeeded
                 sha = delivery.get("commit_sha", "")
                 runs = delivery.get("frozen_ci_runs") or delivery.get("ci_runs") or []
                 if runs and sha:
@@ -445,40 +538,23 @@ class TaskRuntime:
                     return AgentResult(status="FAILED", message=f"CI correction limit exceeded for {original.id}", artifacts=[])
                 next_attempt = current + 1
                 corr_val = list(corr.get("validation", []) or [])
-                # Filter secret-dependent validation that requires GitHub Actions secrets
-                forbidden = ("HIDDEN_PORT_CHECK", "REPOSITORY_CHECK", "REPOSITORY validation CI", "Repository validation CI", "HIDDEN_PORT_CHECK_B64", "REPOSITORY_CHECK_B64", "secrets.HIDDEN")
-                corr_val = [v for v in corr_val if not any(k.lower() in v.lower() for k in forbidden)]
                 orig_val = list(active.validation or [])
-                orig_val = [v for v in orig_val if not any(k.lower() in v.lower() for k in forbidden)]
                 merged = list(dict.fromkeys(orig_val + corr_val))
-                # Keep correction valid even if filter removes everything: fall back to local checks
                 if not merged:
                     merged = ["Run the repository test suite and confirm it passes.", "Verify the correction change is present and no unrelated files are modified."]
-                corr_task = {
-                    "id": f"{original.id}-correction-{next_attempt}",
-                    "role": corr.get("role") or active.role,
-                    "type": corr.get("type") or active.type,
-                    "description": str(corr.get("description", "")).strip(),
-                    "acceptance": list(corr.get("acceptance", [])) or list(active.acceptance or []),
-                    "validation": merged,
-                    "files": list(corr.get("files", [])) or list(active.files or []),
-                    "source_commit_sha": sha,
-                }
+                corr_task = {"id": f"{original.id}-correction-{next_attempt}", "role": corr.get("role") or active.role, "type": corr.get("type") or active.type, "description": str(corr.get("description", "")).strip(), "acceptance": list(corr.get("acceptance", [])) or list(active.acceptance or []), "validation": merged, "files": list(corr.get("files", [])) or list(active.files or []), "source_commit_sha": sha}
                 ckpt.save_correction_task(corr_task, attempt=next_attempt)
                 ckpt.set_phase(TaskPhase.CORRECTING)
                 continue
-
             if phase == TaskPhase.CORRECTING.value:
                 ct = delivery.get("correction_task") or {}
-                ckpt.set_phase(TaskPhase.EXECUTING, event="enter_executing", active_task_id=ct.get("id"), review_attempt=1, last_review_reason="", review_snapshot=None, pending_commit_message=None, pre_commit_sha=None, commit_intent=None, push_status=None, ci_status=None, ci_runs=None, ci_failed_logs=None, push_target=None, frozen_ci_runs=None, validation_snapshot=None, reviewed_tree_sha=None, base_commit_sha=None)
+                ckpt.set_phase(TaskPhase.EXECUTING, event="enter_executing", active_task_id=ct.get("id"), review_attempt=1, last_review_reason="", candidate_ref=None, validation_ref=None, review_package_ref=None, reviewed_tree_sha=None, base_commit_sha=None, review_decision=None)
                 continue
-
             return AgentResult(status="FAILED", message=f"unknown phase: {phase}", artifacts=[])
 
     def _ci_discover(self, sha):
         from agent_system.runtime.ci_monitor import CIMonitor
         return CIMonitor(self.root).discover_for_commit(sha)
-
     def _ci_wait(self, runs):
         from agent_system.runtime.ci_monitor import CIMonitor
         return CIMonitor(self.root).wait_for_runs(runs)

@@ -234,7 +234,10 @@ class WorkflowOrchestrator:
             original = tasks[task_index]
             resume_current = is_resume2 and task_index == start_idx and delivery2.get("phase") not in (None, "", "TASK_COMPLETED")
             print(f"  Dispatch: {original.id} -> {original.role}/{original.type} (index {task_index})")
-            res = self.task_runtime.run_task(original, task_index, resume_current=resume_current)
+            # Ensure TaskRuntime uses frozen project_context
+            if hasattr(self.task_runtime, 'project_context'):
+                self.task_runtime.project_context = ctx
+            res = self.task_runtime.run_task(original, task_index, resume_current=resume_current, project_context=ctx)
             if res.status == "FAILED":
                 return res
 

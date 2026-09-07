@@ -153,24 +153,64 @@ class Git:
         return self.project_changes()
 
     def project_changes(self) -> str:
-        if not self._guard():
-            return ""
-        r = self.shell.run("git diff HEAD")
-        out = r.stdout
-        u = self.shell.run("git ls-files --others --exclude-standard")
-        if u.stdout.strip():
-            for f in u.stdout.strip().splitlines():
-                f = f.strip()
-                if f:
-                    p = self.root / f
-                    if p.is_file():
-                        try:
-                            content = p.read_text(encoding="utf-8")
-                            out += f"\nnew file: {f}\n{content[:3000]}\n"
-                        except Exception:
-                            out += f"\nnew file: {f}\n"
-                    else:
-                        out += f"\nnew file: {f}\n"
+        return self.capture_tree_snapshot().diff
+
+    def read_tree_path(self, tree_sha: str, path: str):
+        if not tree_sha or not path:
+            return None
+        r = self.shell.run(["git", "ls-tree", tree_sha, "--", path])
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        line = r.stdout.strip().splitlines()[0]
+        try:
+            mode, rest = line.split(" ", 1)
+            typ, rest2 = rest.split(" ", 1)
+            sha, _ = rest2.split("\t", 1)
+            return {"mode": mode, "type": typ, "sha": sha}
+        except Exception:
+            return None
+
+    def cat_blob(self, sha: str) -> bytes:
+        if not sha:
+            return b""
+        import subprocess
+        try:
+            out = subprocess.run(["git", "cat-file", "-p", sha], cwd=str(self.root), capture_output=True)
+            if out.returncode != 0:
+                return b""
+            return out.stdout
+        except Exception:
+            return b""
+
+    def blob_size(self, sha: str) -> int:
+        if not sha:
+            return 0
+        r = self.shell.run(["git", "cat-file", "-s", sha])
+        try:
+            return int(r.stdout.strip())
+        except Exception:
+            return 0
+
+    def is_binary_blob(self, data: bytes) -> bool:
+        if b"\x00" in data:
+            return True
+        try:
+            data.decode("utf-8")
+            return False
+        except Exception:
+            return True
+
+    def list_tree_prefix(self, tree_sha: str, prefix: str) -> list:
+        if not tree_sha or not prefix:
+            return []
+        r = self.shell.run(["git", "ls-tree", "-r", "--name-only", tree_sha, "--", prefix])
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        out = []
+        for l in r.stdout.splitlines():
+            p = l.strip()
+            if p:
+                out.append(p)
         return out
 
     def diff_stat(self, args: str = "") -> str:
@@ -461,22 +501,9 @@ class Git:
         return "'" + s.replace("'", "'\"'\"'") + "'"
 
     def changed_files(self) -> list:
-        if not self._guard():
-            return []
-        tracked = self.shell.run(["git", "diff", "--name-only", "HEAD"]).stdout if self.head_sha() else ""
-        untracked = self.shell.run(["git", "ls-files", "--others", "--exclude-standard"]).stdout
-        files = set()
-        for line in tracked.splitlines():
-            f = line.strip()
-            if f and ".agent/" not in f and "__pycache__" not in f and not f.endswith(".pyc"):
-                files.add(f)
-        for line in untracked.splitlines():
-            f = line.strip()
-            if f and ".agent/" not in f and "__pycache__" not in f and not f.endswith(".pyc"):
-                files.add(f)
-        return sorted(files)
+        snap = self.capture_tree_snapshot()
+        return snap.changed_files
 
     def project_changes_model(self) -> ProjectChanges:
-        raw = self.project_changes()
-        files = self.changed_files()
-        return ProjectChanges(diff=raw, changed_files=files, fingerprint=hashlib.sha256(raw.encode()).hexdigest(), has_changes=bool(raw.strip()))
+        snap = self.capture_tree_snapshot()
+        return ProjectChanges(diff=snap.diff, changed_files=snap.changed_files, fingerprint=snap.tree_sha, has_changes=snap.has_changes)

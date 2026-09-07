@@ -125,9 +125,9 @@ A separate ValidationAgent will determine the appropriate repository commands.
 
 Requirements:
 - Must be verifiable locally without GitHub Actions secrets or external CI environment.
-- Must not require secret-dependent workflows (e.g. HIDDEN_PORT_CHECK, REPOSITORY_CHECK, or base64-decoded hidden checks).
-- Prefer local checks: run the repository test suite, inspect Python source imports, verify parsing edge cases, and confirm via git diff that only intended files changed.
-- Do NOT include instructions like "re-run the Repository validation CI workflow" or any step that needs a secret.
+- Must not require secret-dependent workflows or inaccessible external systems.
+- Prefer local checks: run the repository test suite, inspect relevant source imports, verify edge cases, and confirm via git diff that only intended files changed.
+- Do NOT include instructions that require a secret or external CI-only environment.
 
 Examples:
 - Run the repository test suite.

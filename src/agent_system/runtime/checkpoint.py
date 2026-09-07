@@ -60,8 +60,13 @@ class Checkpoint:
     def enter_validating(self, **fields) -> dict:
         return self.set_phase(TaskPhase.VALIDATING, **fields)
 
-    def enter_reviewing(self, review_snapshot: dict) -> dict:
-        return self.set_phase(TaskPhase.REVIEWING, review_snapshot=review_snapshot)
+    def enter_reviewing(self, review_snapshot=None, **fields) -> dict:
+        if review_snapshot is not None and not fields:
+            # legacy single-arg call
+            return self.set_phase(TaskPhase.REVIEWING, review_snapshot=review_snapshot)
+        if review_snapshot is not None:
+            fields["review_snapshot"] = review_snapshot
+        return self.set_phase(TaskPhase.REVIEWING, **fields)
 
     def enter_committing(self, pending_commit_message: str = None, pre_commit_sha=None, commit_intent: dict = None) -> dict:
         fields = {}
@@ -119,11 +124,15 @@ class Checkpoint:
         delivery.pop("correction_attempt", None)
         delivery.pop("active_task_id", None)
         delivery.pop("review_snapshot", None)
+        delivery.pop("candidate_ref", None)
+        delivery.pop("validation_ref", None)
+        delivery.pop("review_package_ref", None)
+        delivery.pop("validation_snapshot", None)
+        delivery.pop("review_decision", None)
         delivery.pop("pending_commit_message", None)
         delivery.pop("pre_commit_sha", None)
         delivery.pop("commit_intent", None)
         delivery.pop("task_baseline", None)
-        delivery.pop("validation_snapshot", None)
         delivery.pop("push_target", None)
         delivery.pop("frozen_ci_runs", None)
         s["delivery"] = delivery
@@ -150,7 +159,7 @@ class Checkpoint:
         delivery["correction_attempt"] = attempt
         delivery["active_task_id"] = correction_task.get("id") if isinstance(correction_task, dict) else None
         delivery["phase"] = TaskPhase.CORRECTING.value
-        for k in ("review_snapshot", "pending_commit_message", "pre_commit_sha", "commit_intent", "push_status", "task_baseline", "validation_snapshot", "push_target", "frozen_ci_runs"):
+        for k in ("review_snapshot", "candidate_ref", "validation_ref", "review_package_ref", "pending_commit_message", "pre_commit_sha", "commit_intent", "push_status", "task_baseline", "validation_snapshot", "push_target", "frozen_ci_runs", "review_decision", "reviewed_tree_sha", "base_commit_sha"):
             delivery.pop(k, None)
         s["delivery"] = delivery
         self.state.save(s, event="enter_correcting")
@@ -186,20 +195,16 @@ def _validate_state_dict(s: dict) -> None:
         if delivery.get("current_task_index") is None or not delivery.get("task_id"):
             raise RuntimeError(f"{phase} requires current_task_index and task_id")
     if phase == TaskPhase.VALIDATING.value:
-        if not delivery.get("reviewed_tree_sha") and not delivery.get("review_snapshot"):
-            pass
-        if delivery.get("reviewed_tree_sha") and not delivery.get("base_commit_sha"):
-            raise RuntimeError("VALIDATING requires base_commit_sha when reviewed_tree_sha present")
-    if phase == TaskPhase.REVIEWING.value and not delivery.get("review_snapshot"):
-        raise RuntimeError("REVIEWING requires review_snapshot")
-    if phase == TaskPhase.REVIEWING.value:
-        snap = delivery.get("review_snapshot") or {}
-        if "project_diff" not in snap:
-            raise RuntimeError("REVIEWING review_snapshot requires project_diff")
-        if "reviewed_tree_sha" not in snap:
-            raise RuntimeError("REVIEWING review_snapshot requires reviewed_tree_sha")
-        if "base_commit_sha" not in snap:
-            raise RuntimeError("REVIEWING review_snapshot requires base_commit_sha")
+        if not delivery.get("reviewed_tree_sha"):
+            raise RuntimeError("VALIDATING requires reviewed_tree_sha")
+        if not delivery.get("base_commit_sha"):
+            raise RuntimeError("VALIDATING requires base_commit_sha")
+        if not delivery.get("candidate_ref"):
+            raise RuntimeError("VALIDATING requires candidate_ref")
+    if phase == TaskPhase.REVIEWING.value and not delivery.get("review_package_ref"):
+        raise RuntimeError("REVIEWING requires review_package_ref")
+    if phase == TaskPhase.REVIEWING.value and not delivery.get("reviewed_tree_sha"):
+        raise RuntimeError("REVIEWING requires reviewed_tree_sha")
     if phase == TaskPhase.COMMITTING.value:
         if not delivery.get("commit_intent") and not delivery.get("pending_commit_message"):
             raise RuntimeError("COMMITTING requires commit_intent or pending_commit_message")

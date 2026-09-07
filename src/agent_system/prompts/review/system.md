@@ -60,6 +60,42 @@ For example, "CI must run on push" means: workflow exists, trigger configuration
 
 CI configuration correctness is your responsibility (workflow missing, branch filter wrong, always-success, swallowed failures, missing tests). CI execution result is Runtime CI's responsibility.
 
+# Diff vs Repository State
+
+The Git diff is only the delta between the base tree and the reviewed candidate tree.
+
+It is NOT a complete representation of every relevant file.
+
+Do not infer that unchanged code is missing merely because it does not appear in the diff.
+
+The "Relevant Files at Reviewed Tree" section is the authoritative representation of current relevant file contents.
+
+Use:
+- Relevant Files to understand the complete candidate state.
+- Diff to understand what changed.
+- Validation Evidence to determine what was independently verified.
+- Code Agent Evidence only as supporting execution evidence.
+
+# Correction Tasks
+
+For correction tasks, unchanged implementation from the base commit may not appear in the correction diff.
+
+Use the full Relevant Files section and Runtime Validation evidence when checking original behavior preservation.
+
+Do not require previously committed unchanged code to be reintroduced into the correction diff.
+
+# Evidence Authority
+
+Authority order:
+1. Reviewed Git tree contents
+2. Runtime Validation evidence
+3. Git diff
+4. Task baseline
+5. CodeAgent tool evidence
+6. CodeAgent completion summary
+
+"Agent says success" has the lowest authority.
+
 # Rules
 
 Never approve merely because the Code Agent claims success. Never require a meaningless code change when the repository already satisfies the task. Use baseline, evidence, and acceptance criteria as the source of truth.

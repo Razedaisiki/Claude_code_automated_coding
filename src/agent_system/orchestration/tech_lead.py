@@ -77,51 +77,53 @@ class TechLead:
         return "\n".join(lines)
 
     def review(self, task, result: AgentResult, project_diff: str = "") -> AgentResult:
-        if getattr(result, 'execution_status', 'COMPLETED') == "ERROR" or result.status == "FAILED":
-            if getattr(result, 'execution_status', None) == "ERROR":
-                return AgentResult(status="FAILED", message=f"task {task.id} runtime error: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None), execution_status="ERROR", stop_reason=getattr(result, 'stop_reason', None))
-            return AgentResult(status="FAILED", message=f"task {task.id} failed: {result.message}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-        if result.status == "INCOMPLETE":
-            return AgentResult(status="FAILED", message=f"task {task.id} incomplete: execution budget exhausted without producing expected changes", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-        if not result.message:
-            return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
-        # verification/test no-code handling delegated to TaskRuntime VALIDATING+outcome
-        # TechLead only handles code implementation review here
+        # Legacy wrapper: build minimal review package and delegate to review_package
+        try:
+            fake_pkg = {"reviewed_tree_sha": self.git.head_tree_sha(), "base_commit_sha": self.git.head_sha(), "base_tree_sha": self.git.head_tree_sha(), "changed_files": [], "project_diff": project_diff or "", "relevant_files": [], "candidate": {"result_status": getattr(result, 'status', 'SUCCESS'), "result_message": getattr(result, 'message', ''), "result_artifacts": list(getattr(result, 'artifacts', None) or []), "execution_evidence": getattr(result, 'evidence', None)}, "validation": None, "task_baseline": None}
+            return self.review_package(task, fake_pkg, None)
+        except Exception:
+            pass
+        # fallback to legacy minimal
+        return self.review_package(task, {"project_diff": project_diff or "", "relevant_files": [], "candidate": {}, "validation": None, "reviewed_tree_sha": "", "base_commit_sha": "", "base_tree_sha": "", "changed_files": [], "task_baseline": None}, None)
 
-        diff = (project_diff or "").strip()
-        if not diff:
-            sat = self._satisfaction_review(task, result)
+    def review_package(self, task, review_package: dict, project_context=None) -> AgentResult:
+        pkg = review_package or {}
+        candidate = pkg.get("candidate") or {}
+        validation = pkg.get("validation")
+        # Error states from candidate
+        rs = candidate.get("result_status", "SUCCESS")
+        if candidate.get("execution_status") == "ERROR" or rs == "FAILED":
+            if candidate.get("execution_status") == "ERROR":
+                return AgentResult(status="FAILED", message=f"task {task.id} runtime error: {candidate.get('result_message','')}", artifacts=candidate.get("result_artifacts", []))
+            return AgentResult(status="FAILED", message=f"task {task.id} failed: {candidate.get('result_message','')}", artifacts=candidate.get("result_artifacts", []))
+        if rs == "INCOMPLETE":
+            return AgentResult(status="FAILED", message=f"task {task.id} incomplete: execution budget exhausted", artifacts=candidate.get("result_artifacts", []))
+        if not candidate.get("result_message"):
+            return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=candidate.get("result_artifacts", []))
+        # Empty diff: satisfaction via unified package
+        diff = (pkg.get("project_diff") or "").strip()
+        if not diff and not pkg.get("changed_files"):
+            sat = self._satisfaction_review_package(task, pkg, project_context)
             if sat is None:
                 print(f"  Satisfaction review unavailable for {task.id} — failing closed")
-                return AgentResult(status="FAILED", message=f"task {task.id} satisfaction review unavailable", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
+                return AgentResult(status="FAILED", message=f"task {task.id} satisfaction review unavailable", artifacts=candidate.get("result_artifacts", []))
             if sat.get("decision") == "ALREADY_SATISFIED":
                 from agent_system.agents.models import TaskOutcome
-
-                return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=result.artifacts, outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])), baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
+                return AgentResult(status="SUCCESS", message=f"task {task.id} already satisfied: {sat.get('reason','')}", artifacts=candidate.get("result_artifacts", []), outcome=TaskOutcome(task_id=task.id, status="SATISFIED", decision="ALREADY_SATISFIED", reason=sat.get("reason",""), evidence=sat.get("evidence",[])))
             if sat.get("decision") == "CHANGES_REQUIRED":
-                return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-            return AgentResult(status="FAILED", message=f"task {task.id} satisfaction review error", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
-        ctx = load_context(self.root)
-        baseline_obj = getattr(result, 'baseline', None)
-        evidence_obj = getattr(result, 'evidence', None)
-        baseline_text = self._format_baseline(baseline_obj)
-        evidence_text = self._format_evidence(evidence_obj)
-        quick = self._quick_baseline_check(task, baseline_obj, diff)
-        if quick is not None:
-            print(f"    baseline advisory: {quick['reason']}")
-            baseline_text += f"\nAdvisory: {quick['reason']}"
-        score = self._llm_review(task, result, diff, ctx, baseline_text=baseline_text, evidence_text=evidence_text)
+                return AgentResult(status="FAILED", message=f"task {task.id} not yet satisfied: {sat.get('reason','')}", artifacts=candidate.get("result_artifacts", []))
+            return AgentResult(status="FAILED", message=f"task {task.id} satisfaction review error", artifacts=candidate.get("result_artifacts", []))
+        score = self._llm_review_package(task, pkg, project_context)
         if score is None:
             print(f"  Review ERROR for {task.id}: reviewer unavailable or invalid response — failing closed")
-            return AgentResult(status="FAILED", message=f"task {task.id} review error: reviewer unavailable", artifacts=result.artifacts, baseline=baseline_obj, evidence=evidence_obj)
+            return AgentResult(status="FAILED", message=f"task {task.id} review error: reviewer unavailable", artifacts=candidate.get("result_artifacts", []))
         if not score.get("pass", True):
-            return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=result.artifacts, baseline=baseline_obj, evidence=evidence_obj)
-        if diff.strip():
+            return AgentResult(status="FAILED", message=f"task {task.id} review failed: {score.get('reason','')}", artifacts=candidate.get("result_artifacts", []))
+        if diff:
             print(f"    diff: {diff[:200]}")
         cm = self.commit_message(task, diff)
         from agent_system.agents.models import TaskOutcome as _TO2
-
-        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=result.artifacts, commit_message=cm, outcome=_TO2(task_id=task.id, status="CHANGED", decision="APPROVED"), baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
+        return AgentResult(status="SUCCESS", message=f"task {task.id} accepted", artifacts=candidate.get("result_artifacts", []), commit_message=cm, outcome=_TO2(task_id=task.id, status="CHANGED", decision="APPROVED"))
 
     def _satisfaction_review(self, task, result):
         try:
@@ -198,6 +200,127 @@ class TechLead:
                     return {"pass": True, "reason": data.get("reason", ""), "decision": dec}
                 if dec in ("CHANGES_REQUIRED", "REJECTED", "FAILED"):
                     return {"pass": False, "reason": data.get("reason", text), "correction": data.get("correction", ""), "decision": dec}
+                if "pass" in data:
+                    return data
+        except Exception:
+            return None
+        return None
+
+    def _format_validation_evidence(self, validation) -> str:
+        if not validation:
+            return "(no validation)"
+        lines = [f"Overall: {validation.get('status','')}", f"Tree: {validation.get('tree_sha','') or validation.get('tree_sha','')}" ]
+        for i, c in enumerate(validation.get("checks", []) or []):
+            lines.append(f"{i+1}. {c.get('instruction','')}")
+            lines.append(f"   {c.get('status','')} - {c.get('evidence','')[:400]}")
+        if validation.get("summary"):
+            lines.append(f"Summary: {validation.get('summary','')[:400]}")
+        return "\n".join(lines)
+
+    def _format_relevant_files(self, pkg) -> str:
+        rf = pkg.get("relevant_files") or []
+        if not rf:
+            return "(no relevant files)"
+        parts = []
+        for fe in rf:
+            path = fe.get("path","")
+            kind = fe.get("kind","")
+            if kind == "symlink":
+                parts.append(f"--- {path} --- (symlink -> {fe.get('symlink_target','')})")
+            elif kind == "missing":
+                parts.append(f"--- {path} --- (missing)")
+            elif fe.get("binary"):
+                parts.append(f"--- {path} --- (binary {fe.get('size',0)} bytes, blob {fe.get('blob_sha','')[:7]})")
+            else:
+                content = fe.get("content","") or ""
+                parts.append(f"--- {path} ---\n{content}")
+        return "\n\n".join(parts)
+
+    def _satisfaction_review_package(self, task, pkg, project_context=None):
+        try:
+            import json
+            p = __import__("pathlib").Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+            system = p.read_text(encoding="utf-8") if p.exists() else "You are a reviewer."
+            ctx = project_context or __import__("agent_system.context", fromlist=["load_context"]).load_context(self.root)
+            candidate = pkg.get("candidate") or {}
+            validation = pkg.get("validation")
+            from agent_system.agents.models import execution_evidence_from_dict
+            # need baseline from pkg
+            relevant = self._format_relevant_files(pkg)
+            val_text = self._format_validation_evidence(validation)
+            # code agent evidence
+            ev = candidate.get("execution_evidence")
+            evidence_text = ""
+            if isinstance(ev, dict):
+                from agent_system.agents.models import execution_evidence_from_dict as _from
+                ee = _from(ev)
+                evidence_text = self._format_evidence(ee) if ee else "(no evidence)"
+            else:
+                evidence_text = "(no evidence)"
+            baseline_text = "(no baseline)"
+            # Add review invariant rules
+            system_extra = "\n\nThe Git diff is only the delta between base tree and reviewed candidate tree. It is NOT a complete representation of every relevant file. The Relevant Files section is authoritative.\nDo not infer missing code merely because it does not appear in the diff."
+            system = system + system_extra
+            user = f"Reviewed Tree SHA: {pkg.get('reviewed_tree_sha','')}\nBase Commit SHA: {pkg.get('base_commit_sha','')}\n\nTask: {task.description}\nAcceptance:\n" + "\n".join(f"- {a}" for a in (task.acceptance or [])) + f"\n\nRelevant Files at Reviewed Tree:\n{relevant}\n\nRuntime Validation:\n{val_text}\n\nCodeAgent Evidence:\n{evidence_text}\n\nChanges from Base:\n{(pkg.get('project_diff','') or '').strip()[:4000] or '(empty diff)'}\n\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
+            text = self._invoke(system, user)
+            s = text.find("{")
+            e = text.rfind("}") + 1
+            if s >= 0 and e > s:
+                data = json.loads(text[s:e])
+                dec = data.get("decision", "")
+                if dec in ("ALREADY_SATISFIED", "SATISFIED", "APPROVED", "NO_CHANGE"):
+                    return {"decision": "ALREADY_SATISFIED", "reason": data.get("reason", text), "evidence": data.get("evidence", [])}
+                if dec in ("CHANGES_REQUIRED", "REQUIRED"):
+                    return {"decision": "CHANGES_REQUIRED", "reason": data.get("reason", text)}
+        except Exception:
+            return None
+        return None
+
+    def _llm_review_package(self, task, pkg, project_context=None):
+        try:
+            import json
+            p = __import__("pathlib").Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+            system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer."
+            ctx = project_context or __import__("agent_system.context", fromlist=["load_context"]).load_context(self.root)
+            candidate = pkg.get("candidate") or {}
+            validation = pkg.get("validation")
+            relevant = self._format_relevant_files(pkg)
+            val_text = self._format_validation_evidence(validation)
+            # code evidence
+            ev = candidate.get("execution_evidence")
+            evidence_text = "(no tool evidence)"
+            if isinstance(ev, dict):
+                from agent_system.agents.models import execution_evidence_from_dict as _from2
+                ee = _from2(ev)
+                evidence_text = self._format_evidence(ee) if ee and ee.events else "(no tool evidence)"
+            # baseline
+            tb = pkg.get("task_baseline")
+            if isinstance(tb, dict):
+                lines = [f"HEAD: {tb.get('commit_sha','')[:7]}"]
+                for rel, snap in (tb.get("files") or {}).items():
+                    if isinstance(snap, dict) and snap.get("exists"):
+                        lines.append(f"{rel}: exists (baseline)")
+                    else:
+                        lines.append(f"{rel}: did not exist")
+                baseline_text = "\n".join(lines)
+            else:
+                baseline_text = "(no baseline)"
+            # Evidence authority ordering in prompt
+            system_extra = "\n\nThe Git diff is only the delta between the base tree and the reviewed candidate tree. It is NOT a complete representation of every relevant file. Do not infer that unchanged code is missing merely because it does not appear in the diff. The Relevant Files at Reviewed Tree section is the authoritative representation of current relevant file contents. Use: Relevant Files to understand the complete candidate state; Diff to understand what changed; Validation Evidence to determine what was independently verified; Code Agent Evidence only as supporting execution evidence.\n\nEvidence authority: 1. Reviewed Git tree contents 2. Runtime Validation evidence 3. Git diff 4. Task baseline 5. CodeAgent tool evidence 6. CodeAgent completion summary\n\nFor correction tasks, unchanged implementation from the base commit may not appear in the correction diff. Use the full Relevant Files section and Runtime Validation evidence when checking original behavior preservation. Do not require previously committed unchanged code to be reintroduced into the correction diff."
+            system = system + system_extra
+            acc = "\n".join(f"- {a}" for a in (task.acceptance or [])) or "(none)"
+            val_goals = "\n".join(f"- {v}" for v in (task.validation or [])) or "(none)"
+            user = f"Reviewed Tree SHA: {pkg.get('reviewed_tree_sha','')}\nBase Commit SHA: {pkg.get('base_commit_sha','')}\n\nEverything in this package refers to this exact reviewed tree.\n\nTask: {task.description}\nAcceptance:\n{acc}\nValidation Goals:\n{val_goals}\n\nRelevant Files at Reviewed Tree:\n{relevant}\n\nRuntime Validation:\n{val_text}\n\nCodeAgent Execution Evidence:\n{evidence_text}\n\nTask Baseline:\n{baseline_text}\n\nChanges from Base Tree to Reviewed Tree:\n{(pkg.get('project_diff','') or '(empty)').strip()[:6000]}\n\nFrozen Plan Context:\n{(ctx.plan or '(none)')[:1000]}\n\nCodeAgent Completion Summary:\n{candidate.get('result_message','')[:1000]}"
+            text = self._invoke(system, user)
+            s = text.find("{")
+            e = text.rfind("}") + 1
+            if s >= 0 and e > s:
+                data = json.loads(text[s:e])
+                dec = str(data.get("decision", "")).upper()
+                if dec in ("APPROVED", "ALREADY_SATISFIED", "SATISFIED"):
+                    return {"pass": True, "reason": data.get("reason", ""), "decision": dec}
+                if dec in ("CHANGES_REQUIRED", "REJECTED", "FAILED"):
+                    return {"pass": False, "reason": data.get("reason", text), "decision": dec}
                 if "pass" in data:
                     return data
         except Exception:
