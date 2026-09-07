@@ -18,6 +18,7 @@ class ProjectContext:
     plan: str
     repository: str
     plan_data: dict = field(default=None)
+    repository_map: str = field(default="")
 
     @property
     def claude_md(self) -> str:
@@ -82,6 +83,13 @@ def load_context(root: Path = None, task_override: str = None, plan_override: st
         except Exception:
             repository = ""
 
+    # Bounded repository map (architecture context for planner)
+    try:
+        from agent_system.planning.repository_map import build_repository_map
+        repository_map = build_repository_map(root)
+    except Exception:
+        repository_map = ""
+
     return ProjectContext(
         task=task,
         instructions=instructions,
@@ -89,4 +97,5 @@ def load_context(root: Path = None, task_override: str = None, plan_override: st
         plan=plan,
         repository=repository,
         plan_data=plan_data,
+        repository_map=repository_map,
     )

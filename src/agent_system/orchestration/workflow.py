@@ -69,7 +69,8 @@ class WorkflowOrchestrator:
         plan_json_file = self.root / ".agent" / "plan.json"
         plan_file = self.root / ".agent" / "plan.md"
 
-        # Plan handling
+        # Plan handling — staged planner with PlanningError fail-closed
+        from agent_system.planning.planner import PlanningError
         plan_data = None
         plan_text = ""
         tasks = []
@@ -97,14 +98,18 @@ class WorkflowOrchestrator:
         elif is_resume and sid:
             # Resume but no frozen plan yet -> need to (re)plan using frozen task
             task_for_planning = frozen_task if frozen_task is not None else (ctx.task or task)
-            raw = self.tech_lead.plan(task_for_planning, ctx)
             try:
-                s = raw.find("{")
-                e = raw.rfind("}")
-                if s >= 0 and e > s:
-                    cand = json.loads(raw[s:e+1])
-                    if isinstance(cand.get("tasks"), list):
-                        plan_data = cand
+                raw = self.tech_lead.plan(task_for_planning, ctx)
+            except PlanningError as e:
+                print(f"  Planning FAILED: {e}")
+                return AgentResult(status="FAILED", message=str(e), artifacts=[])
+            try:
+                from agent_system.plan_parser import extract_json_object
+                cand = extract_json_object(raw)
+                if cand is not None and isinstance(cand.get("tasks"), list):
+                    plan_data = cand
+                else:
+                    plan_data = None
             except Exception:
                 plan_data = None
             if plan_data is not None:
@@ -149,14 +154,18 @@ class WorkflowOrchestrator:
         else:
             # Non-resume: fresh planning using current task
             task_for_planning = ctx.task or task
-            raw = self.tech_lead.plan(task_for_planning, ctx)
             try:
-                s = raw.find("{")
-                e = raw.rfind("}")
-                if s >= 0 and e > s:
-                    cand = json.loads(raw[s:e+1])
-                    if isinstance(cand.get("tasks"), list):
-                        plan_data = cand
+                raw = self.tech_lead.plan(task_for_planning, ctx)
+            except PlanningError as e:
+                print(f"  Planning FAILED: {e}")
+                return AgentResult(status="FAILED", message=str(e), artifacts=[])
+            try:
+                from agent_system.plan_parser import extract_json_object
+                cand = extract_json_object(raw)
+                if cand is not None and isinstance(cand.get("tasks"), list):
+                    plan_data = cand
+                else:
+                    plan_data = None
             except Exception:
                 plan_data = None
             if plan_data is not None:

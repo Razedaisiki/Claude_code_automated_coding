@@ -33,9 +33,9 @@ class TechLead:
         self.reasoning = reasoning
         self.git = Git(self.root)
 
-    def _invoke(self, system: str, user: str) -> str:
+    def _invoke(self, system: str, user: str, *, max_tokens: int = 2048, timeout: int = 1200) -> str:
         try:
-            text = self.reasoning.complete(system=system, user=user, max_tokens=2048, timeout=1200)
+            text = self.reasoning.complete(system=system, user=user, max_tokens=max_tokens, timeout=timeout)
             return text
         except Exception as e:
             raise RuntimeError(f"Parent API error: {e}") from e
@@ -328,42 +328,38 @@ class TechLead:
         return None
 
     def plan(self, task: str, ctx: ProjectContext) -> str:
-        base = Path(__file__).parent.parent / "prompts"
-        planning_path = base / "parent" / "planning.md"
-        system = planning_path.read_text(encoding="utf-8") if planning_path.exists() else _load_prompt("parent")
-        if (base / "common" / "engineering_rules.md").exists():
-            system = system + "\n\n" + (base / "common" / "engineering_rules.md").read_text(encoding="utf-8")
-        milestones_text = "\n\n".join(f"## {m.name}\n{m.content}" for m in ctx.milestones)
-        user = f"Task:\n{task}\n\nRepo: {ctx.repository}\n\nCLAUDE.md:\n{ctx.instructions}\n\nMilestones:\n{milestones_text}"
-        invoked = self._invoke(system, user)
-        if invoked and not invoked.startswith("mock result"):
-            s = invoked.find("{")
-            e = invoked.rfind("}")
-            if s >= 0 and e > s:
-                try:
-                    import json as _pj
+        from agent_system.planning.config import get_planner_config
+        from agent_system.planning.planner import StructuredPlanner, PlanningError
 
-                    from agent_system.plan_parser import is_valid_plan_data as _valid
+        config = get_planner_config()
+        planner = StructuredPlanner(root=self.root, reasoning=self.reasoning, config=config)
+        try:
+            return planner.create_plan(task, ctx)
+        except PlanningError as e:
+            if config.fallback_mode == "single_task":
+                print(f"WARNING: structured planning failed; explicit single-task fallback enabled — {e}")
+                return self._single_task_fallback(task)
+            raise
+        except Exception as e:
+            if config.fallback_mode == "single_task":
+                print(f"WARNING: structured planning failed; explicit single-task fallback enabled — {e}")
+                return self._single_task_fallback(task)
+            raise PlanningError(f"planning failed: {e}") from e
 
-                    cand = _pj.loads(invoked[s:e+1])
-                    if _valid(cand):
-                        return _pj.dumps(cand, ensure_ascii=False)
-                except Exception:
-                    pass
-            print("  [plan: invalid structured response, preserving original task as fallback]")
+    def _single_task_fallback(self, task: str) -> str:
         def _first_meaningful_line(t: str) -> str:
             for line in t.splitlines():
                 s = line.strip()
                 if not s or s.startswith("#"):
                     continue
+                if re.fullmatch(r"[-=_*]{3,}", s):
+                    continue
                 return s
             return "Implement feature"
         first_meaningful = _first_meaningful_line(task)
         import json as _jf
-
         FILE_HINT_RE = re.compile(r"(?:[\w.-]+/)*[\w.-]+\.(?:py|ts|tsx|js|jsx|go|rs|java|yml|yaml|json|toml|md|sh)")
         _files_hint = list(dict.fromkeys(FILE_HINT_RE.findall(task)))
-
         def _extract_markdown_list_section(text: str, headings: set) -> list:
             norm_headings = {h.lower().rstrip(":").strip() for h in headings}
             all_known = {"acceptance", "acceptance criteria", "validation"}
@@ -404,14 +400,11 @@ class TechLead:
                     if m3:
                         continue
             return result
-
         _acceptance = _extract_markdown_list_section(task, {"acceptance", "acceptance criteria"})
         _validation = _extract_markdown_list_section(task, {"validation"})
-
         acceptance = _acceptance if _acceptance else ["Satisfy all requirements described in the original executable task."]
         validation = _validation
-
-        fallback = {
+        fallback_data = {
             "objective": first_meaningful,
             "analysis": "Structured planning output was unavailable. The original task is preserved as one complete executable delivery unit so requirements are not lost.",
             "tasks": [
@@ -426,8 +419,9 @@ class TechLead:
                 }
             ],
             "risks": ["Planner structured output was unavailable; Runtime preserved the original task without semantic reduction."],
+            "planner": {"version": 2, "strategy": "fallback-single-task", "task_count": 1, "fallback_used": True},
         }
-        return _jf.dumps(fallback, ensure_ascii=False)
+        return _jf.dumps(fallback_data, ensure_ascii=False)
 
     def generate_commit_message(self, diff: str, hint: str = "") -> str:
         p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
@@ -451,12 +445,18 @@ class TechLead:
         p = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
         sys_text = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/ci_review") or "You are the Tech Lead reviewing CI results."
         from agent_system.context import load_context
+        from agent_system.plan_parser import render_plan_context
 
         ctx = load_context(self.root)
         from agent_system.runtime.git import Git
 
         git = Git(self.root)
         diff = git.commit_diff(commit_sha) if commit_sha else git.diff()
+        # Use semantic plan context instead of raw plan dump
+        try:
+            plan_ctx = render_plan_context(ctx.plan_data, current_task_id=getattr(task, 'id', None) if task else None, max_chars=4000)
+        except Exception:
+            plan_ctx = (ctx.plan or "(none)")[:4000]
         if hasattr(task, 'description'):
             task_block = f"Executable task: {task.id}\nDescription: {task.description}\nAcceptance: {task.acceptance}\nValidation: {task.validation}\nFiles: {task.files}"
         else:
@@ -464,7 +464,7 @@ class TechLead:
         user = (
             f"Original TASK:\n{ctx.task}\n\n"
             f"Current executable task:\n{task_block}\n\n"
-            f"Plan:\n{ctx.plan}\n\n"
+            f"Plan:\n{plan_ctx}\n\n"
             f"Commit: {commit_sha or ''}\n\n"
             f"Diff:\n{diff}\n\n"
             f"CI status: {ci_status}\n\nCI logs:\n{ci_logs}"
