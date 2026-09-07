@@ -207,16 +207,12 @@ class ClaudeCodeCLI:
         cmd = self._build_command(claude_bin, prompt, settings_path)
         env = self._build_env()
 
+        import signal as _sig
+        popen_kwargs = dict(cwd=str(self.root), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        if not sys.platform.startswith("win"):
+            popen_kwargs["start_new_session"] = True
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.root),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
+            proc = subprocess.Popen(cmd, **popen_kwargs)
         except Exception as e:
             raise RuntimeError(f"Failed to start Claude Code: {e}") from e
 
@@ -334,12 +330,48 @@ class ClaudeCodeCLI:
                     result_text = result_text[:4000]
             if returncode != 0 and not result_text.strip():
                 result_text = (stderr or stdout or "")[:2000] or f"Claude Code exited {returncode}"
-        except subprocess.TimeoutExpired:
+        except (KeyboardInterrupt, BaseException) as _be:
+            is_ki = isinstance(_be, KeyboardInterrupt)
             try:
-                proc.kill()
-                proc.wait(timeout=5)
+                if not sys.platform.startswith("win"):
+                    try:
+                        import os as _os2
+                        _os2.killpg(proc.pid, _sig.SIGTERM)
+                    except Exception:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        if not sys.platform.startswith("win"):
+                            import os as _os3
+                            _os3.killpg(proc.pid, _sig.SIGKILL)
+                        else:
+                            proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=3)
+                    except Exception:
+                        pass
             except Exception:
                 pass
+            if is_ki:
+                raise
+            if isinstance(_be, subprocess.TimeoutExpired):
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
             return ClaudeCodeRunResult(
                 returncode=124,
                 result_text="CodeAgent timed out",
