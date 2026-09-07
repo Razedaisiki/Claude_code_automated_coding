@@ -32,26 +32,35 @@ class ProjectContext:
         return self.repository
 
 
-def load_context(root: Path = None) -> ProjectContext:
-    root = root or Path.cwd()
+def load_context(root: Path = None, task_override: str = None, plan_override: str = None, plan_data_override=None) -> ProjectContext:
+    root = Path(root or Path.cwd()).resolve()
 
     def read(p: Path) -> str:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
-    task = read(root / "TASK.md")
+    if task_override is not None:
+        task = task_override
+    else:
+        task = read(root / "TASK.md")
     instructions = read(root / "CLAUDE.md")
-    plan = read(root / ".agent" / "plan.md")
-    plan_data = None
-    jpath = root / ".agent" / "plan.json"
-    if jpath.exists():
-        try:
-            plan_data = json.loads(jpath.read_text(encoding="utf-8"))
-            if plan_data and not plan:
-                from agent_system.plan_parser import render_plan_md
+    if plan_override is not None:
+        plan = plan_override
+        plan_data = plan_data_override
+    else:
+        plan = read(root / ".agent" / "plan.md")
+        plan_data = None
+        jpath = root / ".agent" / "plan.json"
+        if jpath.exists():
+            try:
+                plan_data = json.loads(jpath.read_text(encoding="utf-8"))
+                if plan_data and not plan:
+                    from agent_system.plan_parser import render_plan_md
 
-                plan = render_plan_md(plan_data)
-        except Exception:
-            plan_data = None
+                    plan = render_plan_md(plan_data)
+            except Exception:
+                plan_data = None
+        if plan_data_override is not None:
+            plan_data = plan_data_override
 
     milestones: List[Milestone] = []
     milestones_dir = root / ".agent" / "milestones"
@@ -63,7 +72,15 @@ def load_context(root: Path = None) -> ProjectContext:
     repository = ""
     git_head = root / ".git" / "HEAD"
     if git_head.exists():
-        repository = read(git_head).strip()
+        try:
+            if git_head.is_file() and not git_head.is_symlink():
+                repository = read(git_head).strip()
+            elif git_head.is_symlink():
+                repository = read(git_head).strip()
+            else:
+                repository = ""
+        except Exception:
+            repository = ""
 
     return ProjectContext(
         task=task,
