@@ -39,7 +39,10 @@ def init_workspace(root: Path = None):
 
     from agent_system.runtime.git import Git
 
-    Git(root).ensure_runtime_isolation()
+    g = Git(root)
+    if (root / ".git").is_file():
+        raise RuntimeError("Unsupported Git layout: linked worktrees are not currently supported.")
+    g.ensure_runtime_isolation()
 
     task_file = root / "TASK.md"
     if not task_file.exists():
