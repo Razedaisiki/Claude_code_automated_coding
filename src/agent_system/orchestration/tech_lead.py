@@ -85,12 +85,8 @@ class TechLead:
             return AgentResult(status="FAILED", message=f"task {task.id} incomplete: execution budget exhausted without producing expected changes", artifacts=result.artifacts, baseline=getattr(result, 'baseline', None), evidence=getattr(result, 'evidence', None))
         if not result.message:
             return AgentResult(status="FAILED", message=f"task {task.id} produced empty result", artifacts=result.artifacts)
-        if task.type == "verification":
-            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (verification)", artifacts=result.artifacts)
-        if task.type == "optional":
-            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (optional)", artifacts=result.artifacts)
-        if task.role != "code":
-            return AgentResult(status="SUCCESS", message=f"task {task.id} accepted (non-code)", artifacts=result.artifacts)
+        # verification/test no-code handling delegated to TaskRuntime VALIDATING+outcome
+        # TechLead only handles code implementation review here
 
         diff = (project_diff or "").strip()
         if not diff:
@@ -136,17 +132,28 @@ class TechLead:
             ctx = load_context(self.root)
             baseline_text = self._format_baseline(getattr(result, 'baseline', None))
             evidence_text = self._format_evidence(getattr(result, 'evidence', None))
+            from agent_system.runtime.path_safety import safe_read_text
             candidates = list(dict.fromkeys(list(task.files or []) + list(getattr(result, "artifacts", None) or [])))
             repo_evidence = ""
             for rel in candidates:
-                pp = self.root / rel
-                if pp.is_file():
-                    try:
-                        repo_evidence += f"\n--- {rel} ---\n{pp.read_text(encoding='utf-8')}\n"
-                    except Exception:
-                        repo_evidence += f"\n--- {rel} --- (unreadable)\n"
-                else:
-                    repo_evidence += f"\n--- {rel} --- (not found)\n"
+                text, err = safe_read_text(self.root, rel)
+                if err:
+                    if "symlink" in err:
+                        try:
+                            target = str((self.root / rel).readlink()) if (self.root / rel).is_symlink() else ""
+                            repo_evidence += f"\n--- {rel} --- (symlink -> {target})\n"
+                        except Exception:
+                            repo_evidence += f"\n--- {rel} --- (symlink)\n"
+                    elif "unsafe" in err or "escapes" in err:
+                        repo_evidence += f"\n--- {rel} --- (unsafe path rejected)\n"
+                    else:
+                        pp = self.root / rel
+                        if not pp.exists():
+                            repo_evidence += f"\n--- {rel} --- (not found)\n"
+                        else:
+                            repo_evidence += f"\n--- {rel} --- (unreadable: {err})\n"
+                    continue
+                repo_evidence += f"\n--- {rel} ---\n{text}\n" if text else f"\n--- {rel} ---\n(empty)\n"
             try:
                 r = self.git.shell.run("git ls-files")
                 listing = r.stdout.strip() if r.returncode == 0 else ""

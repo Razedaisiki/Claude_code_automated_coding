@@ -1,19 +1,44 @@
 from pathlib import Path
 from typing import List
 
+from agent_system.runtime.path_safety import safe_read_text
+
 
 class Filesystem:
     def __init__(self, root: Path = None):
         self.root = (root or Path.cwd()).resolve()
 
     def _resolve(self, path: str) -> Path:
-        p = (self.root / path).resolve()
-        if self.root not in p.parents and p != self.root:
+        from agent_system.runtime.path_safety import check_containment, is_safe_relative_path
+        if not is_safe_relative_path(path):
             raise ValueError(f"path escapes workspace: {path}")
-        return p
+        p = (self.root / path)
+        # symlink parent check
+        parts = Path(path).parts
+        cur = self.root
+        for part in parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink():
+                    raise ValueError(f"symlink not allowed: {path} -> {cur.readlink()}")
+            except ValueError:
+                raise
+            except Exception:
+                pass
+        # final containment
+        ok, msg = check_containment(self.root, p)
+        if not ok:
+            raise ValueError(msg)
+        # Symlink file itself
+        if p.is_symlink():
+            raise ValueError(f"symlink not allowed: {path}")
+        return p.resolve()
 
     def read_file(self, path: str) -> str:
-        return self._resolve(path).read_text(encoding="utf-8")
+        text, err = safe_read_text(self.root, path)
+        if err:
+            raise ValueError(err)
+        return text
 
     def write_file(self, path: str, content: str) -> None:
         p = self._resolve(path)
@@ -36,4 +61,8 @@ class Filesystem:
         return files
 
     def exists(self, path: str) -> bool:
-        return self._resolve(path).exists()
+        try:
+            self._resolve(path)
+            return (self.root / path).exists()
+        except ValueError:
+            return False
