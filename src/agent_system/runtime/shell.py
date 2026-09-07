@@ -12,7 +12,7 @@ class ShellResult:
 
 
 class Shell:
-    def __init__(self, root: Path = None, timeout: int = 30):
+    def __init__(self, root: Path = None, timeout: int = 300):
         self.root = Path(root or Path.cwd()).resolve()
         self.timeout = timeout
 

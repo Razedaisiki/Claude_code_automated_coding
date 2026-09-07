@@ -35,7 +35,7 @@ class TechLead:
 
     def _invoke(self, system: str, user: str) -> str:
         try:
-            text = self.reasoning.complete(system=system, user=user, max_tokens=2048, timeout=20)
+            text = self.reasoning.complete(system=system, user=user, max_tokens=2048, timeout=40)
             return text
         except Exception as e:
             raise RuntimeError(f"Parent API error: {e}") from e
@@ -165,7 +165,7 @@ class TechLead:
             if task.acceptance:
                 repo_evidence += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in task.acceptance)
             user = f"Task: {task.description}\nBaseline:\n{baseline_text}\nRepo evidence:\n{repo_evidence}\nTool evidence:\n{evidence_text}\nPlan:\n{ctx.plan}\nResult:\n{result.message}\nDiff is empty — decide if the repository already satisfies all acceptance criteria."
-            text = self.reasoning.complete(system=system, user=user, max_tokens=512, timeout=15)
+            text = self.reasoning.complete(system=system, user=user, max_tokens=512, timeout=30)
             s = text.find("{")
             e = text.rfind("}") + 1
             if s >= 0 and e > s:
@@ -190,7 +190,7 @@ class TechLead:
             baseline_text = baseline_text or self._format_baseline(getattr(result, 'baseline', None))
             evidence_text = evidence_text or self._format_evidence(getattr(result, 'evidence', None))
             user = f"Task: {task.description}\nAcceptance:\n{acc}\nValidation:\n{val}\nBaseline:\n{baseline_text}\nEvidence:\n{evidence_text}\nPlan:\n{ctx.plan}\nDiff:\n{diff}\nResult:\n{result.message}"
-            text = self.reasoning.complete(system=system, user=user, max_tokens=512, timeout=15)
+            text = self.reasoning.complete(system=system, user=user, max_tokens=512, timeout=30)
             start = text.find("{")
             end = text.rfind("}") + 1
             if start >= 0 and end > start:

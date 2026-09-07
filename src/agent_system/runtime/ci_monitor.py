@@ -6,7 +6,7 @@ from agent_system.runtime.github import GitHub
 
 
 class CIMonitor:
-    def __init__(self, root: Path = None, poll_interval: int = 10, timeout: int = 300, discovery_timeout: int = 60, settle_window: int = 15, discovery_poll_interval: int = 5):
+    def __init__(self, root: Path = None, poll_interval: int = 10, timeout: int = 600, discovery_timeout: int = 60, settle_window: int = 15, discovery_poll_interval: int = 5):
         self.root = Path(root or Path.cwd()).resolve()
         self.github = GitHub(self.root)
         self.poll_interval = poll_interval
