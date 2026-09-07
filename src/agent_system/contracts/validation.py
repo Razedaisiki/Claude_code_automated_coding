@@ -1,20 +1,21 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Protocol
+from typing import List, Protocol
 
 
 @dataclass
-class ValidationCommandResult:
-    command: str
-    exit_code: int
+class ValidationCheckResult:
+    instruction: str
     status: str
-    output: str = ""
+    evidence: str = ""
 
 
 @dataclass
 class ValidationResult:
     tree_sha: str
     status: str
-    commands: List[ValidationCommandResult] = field(default_factory=list)
+    checks: List[ValidationCheckResult] = field(default_factory=list)
+    summary: str = ""
+    tool_events: List[dict] = field(default_factory=list)
 
 
 class ValidationRunner(Protocol):

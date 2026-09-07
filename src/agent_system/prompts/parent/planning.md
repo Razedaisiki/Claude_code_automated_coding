@@ -153,9 +153,18 @@ Output JSON only. No markdown. Schema:
 # Role/Type and Validation Contract
 
 - `implementation` → `role=code`, `type=implementation` : mutating task, must produce a commit when approved (or already satisfied).
-- `verification` → `role=test`, `type=verification` : non-mutating verification task, must NOT edit files, must have at least one validation command, produces VERIFIED outcome and no commit.
+- `verification` → `role=test`, `type=verification` : non-mutating verification task, must NOT edit files, must have at least one validation requirement, produces VERIFIED outcome and no commit.
 - `optional` → usually `role=code`, `type=optional` : mutating but may be skipped if clean and not needed, produces SKIPPED with no commit.
 
-Validation must be real executable commands (e.g. `pytest tests/test_foo.py -q`, `python -m py_compile src/bar.py`), not natural language descriptions. For implementation tasks, validation belongs inside the same task; do NOT create a separate verification task just to "run tests" for an implementation. Only create a standalone verification task when it is a truly independent non-mutating delivery unit.
+Validation contains concise natural-language verification requirements. Describe what must be verified, not necessarily the exact shell command.
 
-Rules: 1-3 tasks only, implementation type tasks must require a file change. Use role code for implementation tasks. Verification tasks must have at least one validation command and role=test.
+Examples:
+- Run the repository test suite.
+- Verify the new parser accepts whitespace around valid input.
+- Confirm existing public APIs remain unchanged.
+- Ensure the project compiles successfully.
+
+Keep validation requirements concrete and verifiable.
+For implementation tasks, validation belongs inside the same task; do NOT create a separate verification task just to "run tests" for an implementation. Only create a standalone verification task when it is a truly independent non-mutating delivery unit.
+
+Rules: 1-3 tasks only, implementation type tasks must require a file change. Use role code for implementation tasks. Verification tasks must have at least one validation requirement and role=test.

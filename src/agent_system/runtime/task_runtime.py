@@ -136,19 +136,16 @@ class TaskRuntime:
                     before_tree = self.git.snapshot_worktree_tree() or ""
                     vres = runner.validate(active, reviewed_tree or before_tree)
                     after_tree = self.git.snapshot_worktree_tree() or ""
-                    # Validation must not mutate tree
                     if after_tree != (reviewed_tree or before_tree):
                         return AgentResult(status="FAILED", message="Validation mutated project tree; failing closed.", artifacts=[])
                     snap2 = self.git.capture_tree_snapshot()
-                    vsnap = {"tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "commands": [{"command": c.command, "exit_code": c.exit_code, "status": c.status, "output": c.output[:2000]} for c in vres.commands]}
+                    vsnap = {"tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "checks": [{"instruction": c.instruction, "status": c.status, "evidence": c.evidence[:2000]} for c in vres.checks], "summary": vres.summary, "tool_events": vres.tool_events}
                     if vres.status != "PASSED":
                         return AgentResult(status="FAILED", message=f"verification validation failed for {active.id}", artifacts=[])
                     ckpt.update_delivery(validation_snapshot=vsnap)
-                    # Direct to REVIEWING then complete as VERIFIED
                     ckpt.enter_reviewing(review_snapshot={"result_status": "SUCCESS", "result_message": "verification", "result_artifacts": [], "commit_message": "", "outcome_status": "VERIFIED", "execution_status": "COMPLETED", "stop_reason": None, "evidence": None, "project_diff": snap2.diff, "changed_files": snap2.changed_files, "project_fingerprint": snap2.tree_sha, "active_task_id": active.id, "reviewed_tree_sha": reviewed_tree or snap2.tree_sha, "base_commit_sha": base_sha or snap2.base_commit_sha, "validation_snapshot": vsnap})
                     # Fall through to REVIEWING
                     continue
-                # Normal code path: optionally run declared validation
                 if active.validation:
                     cur_tree = snap.tree_sha
                     if reviewed_tree and cur_tree != reviewed_tree:
@@ -160,7 +157,7 @@ class TaskRuntime:
                     after_tree = self.git.snapshot_worktree_tree() or ""
                     if after_tree != (reviewed_tree or before_tree):
                         return AgentResult(status="FAILED", message="Validation mutated project tree; failing closed.", artifacts=[])
-                    vsnap = {"tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "commands": [{"command": c.command, "exit_code": c.exit_code, "status": c.status, "output": c.output[:2000]} for c in vres.commands]}
+                    vsnap = {"tree_sha": vres.tree_sha or reviewed_tree or before_tree, "status": vres.status, "checks": [{"instruction": c.instruction, "status": c.status, "evidence": c.evidence[:2000]} for c in vres.checks], "summary": vres.summary, "tool_events": vres.tool_events}
                     ckpt.update_delivery(validation_snapshot=vsnap)
                     if vres.status != "PASSED":
                         return AgentResult(status="FAILED", message=f"validation failed for {active.id}", artifacts=[])
@@ -447,13 +444,16 @@ class TaskRuntime:
                 if current >= MAX_CI_CORRECTIONS:
                     return AgentResult(status="FAILED", message=f"CI correction limit exceeded for {original.id}", artifacts=[])
                 next_attempt = current + 1
+                corr_val = list(corr.get("validation", []) or [])
+                orig_val = list(active.validation or [])
+                merged = list(dict.fromkeys(orig_val + corr_val))
                 corr_task = {
                     "id": f"{original.id}-correction-{next_attempt}",
                     "role": corr.get("role") or active.role,
                     "type": corr.get("type") or active.type,
                     "description": str(corr.get("description", "")).strip(),
                     "acceptance": list(corr.get("acceptance", [])) or list(active.acceptance or []),
-                    "validation": list(corr.get("validation", [])) or list(active.validation or []),
+                    "validation": merged,
                     "files": list(corr.get("files", [])) or list(active.files or []),
                     "source_commit_sha": sha,
                 }

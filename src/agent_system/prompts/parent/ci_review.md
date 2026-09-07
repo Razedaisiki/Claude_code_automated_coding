@@ -115,3 +115,16 @@ Do not modify unrelated code merely to make CI green.
 Prefer root-cause analysis.
 
 Correction work must be minimal and directly related to the failing commit.
+
+# Correction Validation
+
+Provide concise, concrete verification requirements for the correction.
+
+The validation requirements are natural-language goals.
+A separate ValidationAgent will determine the appropriate repository commands.
+
+Examples:
+- Run the repository test suite.
+- Verify the expected file contains the required constant.
+- Confirm the parser still validates the required range.
+

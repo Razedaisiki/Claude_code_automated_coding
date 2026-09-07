@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agent_system.runtime.atomic_io import atomic_write_bytes, atomic_write_json, fsync_parent_dir
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 ALLOWED_STATUSES = {
     "INITIALIZED", "RUNNING", "REVIEW_PENDING", "COMMITTING",
@@ -159,6 +159,21 @@ class StateManager:
             migrated["delivery"] = {}
         return migrated
 
+    def _migrate_v5(self, data: dict):
+        if data.get("schema_version") != 5:
+            return None
+        delivery = data.get("delivery") or {}
+        phase = delivery.get("phase") if isinstance(delivery, dict) else None
+        is_terminal = data.get("status") in ("INITIALIZED", "COMPLETED") or not phase or phase == "TASK_COMPLETED"
+        if phase == "VALIDATING":
+            raise RuntimeError(f"Legacy VALIDATING checkpoint is incompatible with natural-language validation. (phase={phase}) Please reset workspace or complete with previous version.")
+        if not is_terminal and phase in UNFINISHED_PHASES and phase not in ("VALIDATING",):
+            # Allow migration for other unfinished phases but note snapshot shape changed
+            pass
+        migrated = dict(data)
+        migrated["schema_version"] = CURRENT_SCHEMA_VERSION
+        return migrated
+
     def load(self) -> dict:
         if not self.state_file.exists():
             base = {"status": "INITIALIZED", "session_id": None, "schema_version": CURRENT_SCHEMA_VERSION, "revision": 0, "updated_at": datetime.now(timezone.utc).isoformat(), "task_history": [], "delivery": {}, "task_sha256": "", "plan_sha256": "", "workflow_start_sha": ""}
@@ -172,6 +187,16 @@ class StateManager:
                     migrated = self._migrate_v4(data)
                     if migrated is not None:
                         self.save(migrated, event="migrated_v4_to_v5")
+                        return migrated
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(str(e)) from e
+            if data.get("schema_version") == 5:
+                try:
+                    migrated = self._migrate_v5(data)
+                    if migrated is not None:
+                        self.save(migrated, event="migrated_v5_to_v6")
                         return migrated
                 except RuntimeError:
                     raise
