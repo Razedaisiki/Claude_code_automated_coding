@@ -21,7 +21,8 @@ Rules:
 - Maximize useful decomposition. Do not minimize task count as a goal.
 - Split whenever the request contains multiple independently understandable, independently reviewable responsibilities.
 - Do not merge responsibilities merely because they could be committed together.
-- A project-scale request may reasonably require 10-25 or more tasks.
+- A project-scale request may reasonably require 10-30 or more tasks. 10-25 is common for project-scale work.
 - Do not create procedure tasks (inspect, run tests, review, create directories, think).
 - Tests required for an implementation belong to the same task.
-- Return 1-32 skeleton entries in executable dependency order.
+- Return a useful number of skeleton entries in executable dependency order.
+- Never exceed the configured safety limit supplied in the request.

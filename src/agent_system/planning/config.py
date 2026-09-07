@@ -19,8 +19,8 @@ def _parse_int_env(name: str, default: int, lo: int, hi: int) -> int:
 
 @dataclass(frozen=True)
 class PlannerConfig:
-    max_tasks: int = 32
-    max_tokens: int = 8192
+    max_tasks: int = 64
+    max_tokens: int = 32000
     split_rounds: int = 3
     enrich_batch_size: int = 5
     repair_attempts: int = 2
@@ -28,8 +28,8 @@ class PlannerConfig:
 
 
 def get_planner_config() -> PlannerConfig:
-    max_tasks = _parse_int_env("WORKFLOW_PLANNER_MAX_TASKS", 32, 1, 100)
-    max_tokens = _parse_int_env("WORKFLOW_PLANNER_MAX_TOKENS", 8192, 1024, 32000)
+    max_tasks = _parse_int_env("WORKFLOW_PLANNER_MAX_TASKS", 64, 1, 100)
+    max_tokens = _parse_int_env("WORKFLOW_PLANNER_MAX_TOKENS", 32000, 1024, 64000)
     split_rounds = _parse_int_env("WORKFLOW_PLANNER_SPLIT_ROUNDS", 3, 0, 5)
     batch_size = _parse_int_env("WORKFLOW_PLANNER_ENRICH_BATCH_SIZE", 5, 1, 10)
     repair_attempts = _parse_int_env("WORKFLOW_PLANNER_REPAIR_ATTEMPTS", 2, 0, 5)

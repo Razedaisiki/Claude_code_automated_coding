@@ -16,7 +16,53 @@ class _MockReasoningProvider:
     def complete(self, *, system: str, user: str, max_tokens: int, timeout: int) -> str:
         low_system = (system or "").lower()
         low_user = (user or "").lower()
-        # satisfaction review: empty diff path — user contains the satisfaction prompt suffix
+        # Staged planner markers
+        if "task skeleton" in low_system:
+            return '{"objective":"mock skeleton","tasks":[{"title":"Mock task","scope":"Mock scope"}]}'
+        if "decomposition refinement" in low_system:
+            return '{"changed":false,"tasks":[{"title":"Mock task","scope":"Mock scope"}]}'
+        if "task enrichment" in low_system:
+            # Extract expected count from user if possible, else 1
+            import re, json
+            m = re.search(r"Enrich batch \d+/\d+ \((task\d+)-", user)
+            start = 1
+            if m:
+                try:
+                    start = int(m.group(1).replace("task",""))
+                except Exception:
+                    start = 1
+            # Count tasks in the batch input
+            import re as _re
+            # Rough: count occurrences of task\d+ in user
+            batch_tasks = []
+            # Try to parse the skeleton batch JSON in user
+            import json as _js
+            try:
+                import re as __re
+                mm = __re.search(r'\{"tasks":\s*\[.*?\]\}', user, re.DOTALL)
+                if mm:
+                    obj = json.loads(mm.group(0))
+                    n = len(obj.get("tasks", []) or [])
+                    for i in range(n):
+                        tid = f"task{start+i:03d}"
+                        batch_tasks.append({"description": f"Mock task {tid}", "acceptance": ["mock"], "validation": ["mock"], "files": []})
+                else:
+                    batch_tasks = [{"description": "Mock task", "acceptance": ["mock"], "validation": ["mock"], "files": []}]
+            except Exception:
+                batch_tasks = [{"description": "Mock task", "acceptance": ["mock"], "validation": ["mock"], "files": []}]
+            if not batch_tasks:
+                batch_tasks = [{"description": "Mock task", "acceptance": ["mock"], "validation": ["mock"], "files": []}]
+            return json.dumps({"tasks": batch_tasks})
+        if "json repair" in low_system:
+            # Generic repair: return a valid skeleton/enrich based on what's asked
+            if "skeleton" in low_user or "title" in low_user.lower():
+                return '{"objective":"mock","tasks":[{"title":"Mock task","scope":"Mock scope"}]}'
+            if "task00" in user:
+                import re, json
+                ids = re.findall(r"task\d+", user)
+                if ids:
+                    return json.dumps({"tasks": [{"description": f"Mock {tid}", "acceptance": ["mock"], "validation": ["mock"], "files": []} for tid in ids]})
+            return '{"tasks":[{"description":"Mock task","acceptance":["mock"],"validation":["mock"],"files":[]}]}'
         if "already satisfies all acceptance criteria" in low_user:
             return '{"decision":"ALREADY_SATISFIED","reason":"mock satisfied","evidence":[]}'
         if self.CI_REVIEW_MARKER in low_system:
@@ -25,7 +71,6 @@ class _MockReasoningProvider:
             return "chore: mock commit"
         if self.PLAN_MARKER in low_system:
             return '{"tasks":[{"id":"task001","description":"mock task","acceptance":["mock"],"validation":[],"files":[],"role":"code","type":"implementation"}],"objective":"mock","analysis":"mock","risks":[]}'
-        # default: normal review
         return '{"decision":"APPROVED","reason":"mock approved"}'
 
 

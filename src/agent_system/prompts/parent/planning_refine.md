@@ -31,4 +31,13 @@ Rules:
 
 - Preserve the original objective and task order (split children remain in place of parent).
 - Do not inflate task count without independently valuable boundaries.
-- Do not reduce task count merely to repair formatting.
+
+This stage is split-only.
+
+Do not merge, remove, or consolidate existing responsibilities.
+
+The number of tasks must never decrease.
+
+You may:
+- keep a task unchanged
+- replace one task with multiple more focused child tasks
