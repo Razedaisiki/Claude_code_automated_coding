@@ -214,7 +214,6 @@ class TaskRuntime:
                     return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
                 vsnap_obj = None
                 val_ref = delivery.get("validation_ref")
-                # Resume idempotency: reuse existing validation if already present
                 if val_ref:
                     try:
                         state2 = ckpt.state.load()
@@ -226,6 +225,21 @@ class TaskRuntime:
                         elif isinstance(val_ref, dict) and val_ref.get("status"):
                             vsnap_obj = val_ref
                     except Exception:
+                        vsnap_obj = None
+                        val_ref = None
+                    # If existing validation is FAILED, trigger review retry instead of hard FAIL
+                    if vsnap_obj is not None and vsnap_obj.get("status") != "PASSED":
+                        attempt = int(delivery.get("review_attempt", 1))
+                        reason = f"validation failed for {active.id}: {vsnap_obj.get('summary','')[:500]}"
+                        if attempt >= MAX_REVIEW_ATTEMPTS:
+                            return AgentResult(status="FAILED", message=reason, artifacts=[])
+                        print(f"  Validation FAILED for {active.id}, retrying execution (attempt {attempt} -> {attempt+1})")
+                        ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=reason, candidate_ref=None, validation_ref=None, review_package_ref=None, reviewed_tree_sha=None, base_commit_sha=None, review_decision=None)
+                        continue
+                    if vsnap_obj is not None and vsnap_obj.get("status") == "PASSED":
+                        # Reuse passed validation; skip to building review package
+                        pass
+                    else:
                         vsnap_obj = None
                         val_ref = None
                 if vsnap_obj is None and active.validation:
@@ -246,9 +260,13 @@ class TaskRuntime:
                         val_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(vsnap_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
                     ckpt.update_delivery(validation_ref=val_ref)
                     if vres.status != "PASSED":
-                        return AgentResult(status="FAILED", message=f"validation failed for {active.id}: {vres.summary[:200]}", artifacts=[])
-                elif vsnap_obj is not None and vsnap_obj.get("status") != "PASSED":
-                    return AgentResult(status="FAILED", message=f"validation failed for {active.id}: {vsnap_obj.get('summary','')[:200]}", artifacts=[])
+                        attempt = int(delivery.get("review_attempt", 1))
+                        reason = f"validation failed for {active.id}: {vres.summary[:500]}"
+                        if attempt >= MAX_REVIEW_ATTEMPTS:
+                            return AgentResult(status="FAILED", message=reason, artifacts=[])
+                        print(f"  Validation FAILED for {active.id}, retrying execution (attempt {attempt} -> {attempt+1})")
+                        ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=reason, candidate_ref=None, validation_ref=None, review_package_ref=None, reviewed_tree_sha=None, base_commit_sha=None, review_decision=None)
+                        continue
                 # Handle verification no-commit path
                 if active.role == "test" and active.type == "verification":
                     if vsnap_obj is None or vsnap_obj.get("status") != "PASSED":
