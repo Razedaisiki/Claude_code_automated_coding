@@ -213,8 +213,22 @@ class TaskRuntime:
                 if cur_snap.tree_sha != reviewed_tree:
                     return AgentResult(status="FAILED", message="Reviewed tree no longer matches workspace.", artifacts=[])
                 vsnap_obj = None
-                val_ref = None
-                if active.validation:
+                val_ref = delivery.get("validation_ref")
+                # Resume idempotency: reuse existing validation if already present
+                if val_ref:
+                    try:
+                        state2 = ckpt.state.load()
+                        sid2 = state2.get("session_id") or ""
+                        if sid2 and isinstance(val_ref, dict) and val_ref.get("path"):
+                            from agent_system.runtime.review_store import ReviewArtifactStore as _StoreV
+                            store_v = _StoreV(self.root, sid2)
+                            vsnap_obj = store_v.load_validation(val_ref)
+                        elif isinstance(val_ref, dict) and val_ref.get("status"):
+                            vsnap_obj = val_ref
+                    except Exception:
+                        vsnap_obj = None
+                        val_ref = None
+                if vsnap_obj is None and active.validation:
                     from agent_system.runtime.validation import get_validation_runner
                     runner = get_validation_runner(self.root)
                     before_tree = self.git.snapshot_worktree_tree() or ""
@@ -233,6 +247,8 @@ class TaskRuntime:
                     ckpt.update_delivery(validation_ref=val_ref)
                     if vres.status != "PASSED":
                         return AgentResult(status="FAILED", message=f"validation failed for {active.id}: {vres.summary[:200]}", artifacts=[])
+                elif vsnap_obj is not None and vsnap_obj.get("status") != "PASSED":
+                    return AgentResult(status="FAILED", message=f"validation failed for {active.id}: {vsnap_obj.get('summary','')[:200]}", artifacts=[])
                 # Handle verification no-commit path
                 if active.role == "test" and active.type == "verification":
                     if vsnap_obj is None or vsnap_obj.get("status") != "PASSED":
