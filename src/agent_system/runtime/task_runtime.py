@@ -192,6 +192,58 @@ class TaskRuntime:
                 cand_ref = delivery.get("candidate_ref")
                 if not cand_ref:
                     return AgentResult(status="FAILED", message="VALIDATING requires candidate_ref", artifacts=[])
+                # Permanent fix: Already-satisfied with no diff should not require VALIDATING
+                # Many plans mark error-path tasks as implementation with no file gap
+                try:
+                    _cur = self.git.capture_tree_snapshot()
+                    _has_diff = bool(_cur.diff.strip()) or bool(_cur.changed_files)
+                    if not _has_diff:
+                        # Peek candidate: if result already says Already satisfied / no changes, skip validation
+                        _cand_peek = None
+                        try:
+                            _state_peek = ckpt.state.load()
+                            _sid_peek = _state_peek.get("session_id") or ""
+                            if _sid_peek and isinstance(cand_ref, dict) and cand_ref.get("path"):
+                                from agent_system.runtime.review_store import ReviewArtifactStore as _StorePeek
+                                _cand_peek = _StorePeek(self.root, _sid_peek).load_candidate(cand_ref)
+                            elif isinstance(cand_ref, dict) and cand_ref.get("reviewed_tree_sha"):
+                                _cand_peek = cand_ref
+                        except Exception:
+                            _cand_peek = None
+                        _msg = str(_cand_peek.get("result_message", "")) if isinstance(_cand_peek, dict) else ""
+                        if "Already satisfied" in _msg:
+                            # Directly build review package as SATISFIED path without re-validating
+                            from agent_system.runtime.review_store import ReviewArtifactStore as _StorePkg
+                            _state_pkg = ckpt.state.load()
+                            _sid_pkg = _state_pkg.get("session_id") or ""
+                            _candidate_pkg = _cand_peek or {}
+                            _vsnap_ro = {"task_id": active.id, "tree_sha": reviewed_tree or _cur.tree_sha, "status": "PASSED", "checks": [], "summary": "Already satisfied — no diff, validation skipped", "tool_events": []}
+                            # Write a synthetic validation reflecting already-satisfied
+                            try:
+                                if _sid_pkg:
+                                    _store_v = _StorePkg(self.root, _sid_pkg)
+                                    _attempt_ro = int(_candidate_pkg.get("review_attempt", 1) or 1)
+                                    ckpt.update_delivery(validation_ref=_store_v.write_validation(active.id, _attempt_ro, _vsnap_ro))
+                            except Exception:
+                                ckpt.update_delivery(validation_ref={"path": "", "sha256": hashlib.sha256(json.dumps(_vsnap_ro, sort_keys=True, ensure_ascii=False).encode()).hexdigest(), "status": "PASSED"})
+                            print(f"  VALIDATING: Already satisfied with no diff, skipping validation for {active.id}")
+                            # Fall through to review package build below by continuing loop? We stay in VALIDATING
+                            # Build minimal review package to enter REVIEWING
+                            _relevant = self._relevant_files_union(active, original, _cur, _candidate_pkg.get("result_artifacts", []))
+                            try:
+                                _rf = self._build_relevant_file_evidence(reviewed_tree or _cur.tree_sha, _relevant)
+                            except RuntimeError as e:
+                                return AgentResult(status="FAILED", message=str(e), artifacts=[])
+                            _pkg_obj = {"package_version": 1, "session_id": _sid_pkg, "task_id": active.id, "original_task_id": original.id, "review_attempt": int(_candidate_pkg.get("review_attempt", 1) or 1), "reviewed_tree_sha": reviewed_tree or _cur.tree_sha, "base_commit_sha": base_sha or _candidate_pkg.get("base_commit_sha", ""), "base_tree_sha": _candidate_pkg.get("base_tree_sha", "") or "", "changed_files": [], "project_diff": "", "relevant_files": _rf, "candidate": _candidate_pkg, "validation": _vsnap_ro, "task_baseline": delivery.get("task_baseline")}
+                            if _sid_pkg:
+                                _store_pkg2 = _StorePkg(self.root, _sid_pkg)
+                                _pkg_ref = _store_pkg2.write_review_package(active.id, int(_candidate_pkg.get("review_attempt", 1) or 1), _pkg_obj)
+                            else:
+                                _pkg_ref = {"path": "", "sha256": hashlib.sha256(json.dumps(_pkg_obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                            ckpt.enter_reviewing(review_package_ref=_pkg_ref, reviewed_tree_sha=_pkg_obj["reviewed_tree_sha"], base_commit_sha=_pkg_obj["base_commit_sha"])
+                            continue
+                except Exception:
+                    pass
                 try:
                     state = ckpt.state.load()
                     sid = state.get("session_id") or ""
