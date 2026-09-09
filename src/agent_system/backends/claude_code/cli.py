@@ -199,11 +199,10 @@ class ClaudeCodeCLI:
             env.pop(k, None)
         return env
 
-    def run(self, prompt: str, timeout: int = 1800) -> ClaudeCodeRunResult:
-        # Default 30 minutes matches user's competition requirement
+    def run(self, prompt: str, timeout: int = 10800) -> ClaudeCodeRunResult:
         if timeout is None or timeout <= 0:
-            timeout = 1800
-        timeout = min(timeout, 1800)
+            timeout = 10800
+        timeout = min(timeout, 10800)
         claude_bin = self._find_claude()
         self._check_version(claude_bin)
         self._check_sandbox_deps()
