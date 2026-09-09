@@ -8,11 +8,41 @@ from agent_system.runtime.git import Git
 
 
 def _load_prompt(name: str) -> str:
+    try:
+        from agent_system.prompts.registry import PromptRegistry
+        mapping = {
+            "parent": PromptRegistry.parent_system(),
+            "parent/system": PromptRegistry.parent_system(),
+            "review/system": PromptRegistry.review_system(),
+            "parent/ci_review": PromptRegistry.runtime_prompt("ci_review"),
+            "parent/commit_message": PromptRegistry.runtime_prompt("commit_message"),
+            "parent/historian": PromptRegistry.runtime_prompt("historian"),
+            "common/engineering_rules": PromptRegistry.common_rules(),
+        }
+        if name in mapping and mapping[name]:
+            return mapping[name]
+        # Direct registry for prompts/planning/* is handled in planning/planner.py
+        # Legacy code.md / common
+        if name in ("code", "code/system", "code/execution"):
+            text = PromptRegistry.coding_prompt(name.split("/")[-1].replace("system","system").replace("execution","execution"))
+            # coding_prompt already handles legacy fallback
+            if text:
+                return text
+        # Generic registry fallback
+        if name.startswith("parent/"):
+            rel = name.replace("parent/", "")
+            text = PromptRegistry.runtime_prompt(rel)
+            if text:
+                return text
+    except Exception:
+        pass
     base = Path(__file__).parent.parent / "prompts"
     candidates = [
         base / f"{name}.md",
         base / name / "system.md",
         base / name / "planning.md",
+        base / "agents" / f"{name}.md",
+        base / "agents" / name / "system.md",
     ]
     parts = []
     for p in candidates:
@@ -128,9 +158,18 @@ class TechLead:
     def _satisfaction_review(self, task, result):
         try:
             import json
-
-            p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
-            system = p.read_text(encoding="utf-8") if p.exists() else "You are a reviewer. Decide if the repository already satisfies the task. Return JSON: {\"decision\": \"ALREADY_SATISFIED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
+            try:
+                from agent_system.prompts.registry import PromptRegistry
+                system = PromptRegistry.review_system() or ""
+                if not system:
+                    p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                    system = p.read_text(encoding="utf-8") if p.exists() else ""
+                if not system:
+                    p2 = Path(__file__).parent.parent / "prompts" / "agents" / "review" / "system.md"
+                    system = p2.read_text(encoding="utf-8") if p2.exists() else "You are a reviewer."
+            except Exception:
+                p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                system = p.read_text(encoding="utf-8") if p.exists() else "You are a reviewer. Decide if the repository already satisfies the task. Return JSON: {\"decision\": \"ALREADY_SATISFIED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
             ctx = load_context(self.root)
             baseline_text = self._format_baseline(getattr(result, 'baseline', None))
             evidence_text = self._format_evidence(getattr(result, 'evidence', None))
@@ -182,9 +221,18 @@ class TechLead:
     def _llm_review(self, task, result: AgentResult, diff: str, ctx: ProjectContext, baseline_text: str = "", evidence_text: str = ""):
         try:
             import json
-
-            p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
-            system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer. Reply JSON only: {\"decision\": \"APPROVED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
+            try:
+                from agent_system.prompts.registry import PromptRegistry
+                system = PromptRegistry.review_system() or ""
+                if not system:
+                    p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                    system = p.read_text(encoding="utf-8") if p.exists() else ""
+                if not system:
+                    p2 = Path(__file__).parent.parent / "prompts" / "agents" / "review" / "system.md"
+                    system = p2.read_text(encoding="utf-8") if p2.exists() else "You are a code reviewer."
+            except Exception:
+                p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer. Reply JSON only: {\"decision\": \"APPROVED\"|\"CHANGES_REQUIRED\", \"reason\": string}"
             val = "\n".join(f"- {v}" for v in (task.validation or [])) or "(none)"
             acc = "\n".join(f"- {a}" for a in (task.acceptance or [])) or "(none)"
             baseline_text = baseline_text or self._format_baseline(getattr(result, 'baseline', None))
@@ -239,8 +287,18 @@ class TechLead:
     def _satisfaction_review_package(self, task, pkg, project_context=None):
         try:
             import json
-            p = __import__("pathlib").Path(__file__).parent.parent / "prompts" / "review" / "system.md"
-            system = p.read_text(encoding="utf-8") if p.exists() else "You are a reviewer."
+            try:
+                from agent_system.prompts.registry import PromptRegistry
+                system = PromptRegistry.review_system() or ""
+                if not system:
+                    p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                    system = p.read_text(encoding="utf-8") if p.exists() else ""
+                if not system:
+                    p2 = Path(__file__).parent.parent / "prompts" / "agents" / "review" / "system.md"
+                    system = p2.read_text(encoding="utf-8") if p2.exists() else "You are a reviewer."
+            except Exception:
+                p = __import__("pathlib").Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                system = p.read_text(encoding="utf-8") if p.exists() else "You are a reviewer."
             ctx = project_context or __import__("agent_system.context", fromlist=["load_context"]).load_context(self.root)
             candidate = pkg.get("candidate") or {}
             validation = pkg.get("validation")
@@ -279,8 +337,18 @@ class TechLead:
     def _llm_review_package(self, task, pkg, project_context=None):
         try:
             import json
-            p = __import__("pathlib").Path(__file__).parent.parent / "prompts" / "review" / "system.md"
-            system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer."
+            try:
+                from agent_system.prompts.registry import PromptRegistry
+                system = PromptRegistry.review_system() or ""
+                if not system:
+                    p = Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                    system = p.read_text(encoding="utf-8") if p.exists() else ""
+                if not system:
+                    p2 = Path(__file__).parent.parent / "prompts" / "agents" / "review" / "system.md"
+                    system = p2.read_text(encoding="utf-8") if p2.exists() else "You are a code reviewer."
+            except Exception:
+                p = __import__("pathlib").Path(__file__).parent.parent / "prompts" / "review" / "system.md"
+                system = p.read_text(encoding="utf-8") if p.exists() else "You are a code reviewer."
             ctx = project_context or __import__("agent_system.context", fromlist=["load_context"]).load_context(self.root)
             candidate = pkg.get("candidate") or {}
             validation = pkg.get("validation")
@@ -424,8 +492,18 @@ class TechLead:
         return _jf.dumps(fallback_data, ensure_ascii=False)
 
     def generate_commit_message(self, diff: str, hint: str = "") -> str:
-        p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
-        system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/commit_message") or "Generate a commit message."
+        try:
+            from agent_system.prompts.registry import PromptRegistry
+            system = PromptRegistry.runtime_prompt("commit_message") or ""
+            if not system:
+                p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
+                system = p.read_text(encoding="utf-8") if p.exists() else ""
+            if not system:
+                p2 = Path(__file__).parent.parent / "prompts" / "runtime" / "commit_message.md"
+                system = p2.read_text(encoding="utf-8") if p2.exists() else "Generate a commit message."
+        except Exception:
+            p = Path(__file__).parent.parent / "prompts" / "parent" / "commit_message.md"
+            system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/commit_message") or "Generate a commit message."
         user = f"Diff:\n{diff}\n\nHint:\n{hint}" if hint else f"Diff:\n{diff}"
         text = self._invoke(system, user)
         lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
@@ -442,8 +520,18 @@ class TechLead:
         return self.commit_message(task, diff)
 
     def ci_review(self, ci_status: str, ci_logs: str = "", task=None, commit_sha: str = None) -> dict:
-        p = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
-        sys_text = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/ci_review") or "You are the Tech Lead reviewing CI results."
+        try:
+            from agent_system.prompts.registry import PromptRegistry
+            sys_text = PromptRegistry.runtime_prompt("ci_review") or ""
+            if not sys_text:
+                p = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
+                sys_text = p.read_text(encoding="utf-8") if p.exists() else ""
+            if not sys_text:
+                p2 = Path(__file__).parent.parent / "prompts" / "runtime" / "ci_review.md"
+                sys_text = p2.read_text(encoding="utf-8") if p2.exists() else "You are the Tech Lead reviewing CI results."
+        except Exception:
+            p = Path(__file__).parent.parent / "prompts" / "parent" / "ci_review.md"
+            sys_text = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/ci_review") or "You are the Tech Lead reviewing CI results."
         from agent_system.context import load_context
         from agent_system.plan_parser import render_plan_context
 
@@ -498,8 +586,18 @@ class TechLead:
         from agent_system.milestone.context import collect_context
 
         ctx = collect_context(self.root, feedback=feedback)
-        p = Path(__file__).parent.parent / "prompts" / "parent" / "historian.md"
-        system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/historian") or "You are the Engineering Historian. Create a milestone document."
+        try:
+            from agent_system.prompts.registry import PromptRegistry
+            system = PromptRegistry.runtime_prompt("historian") or ""
+            if not system:
+                p = Path(__file__).parent.parent / "prompts" / "parent" / "historian.md"
+                system = p.read_text(encoding="utf-8") if p.exists() else ""
+            if not system:
+                p2 = Path(__file__).parent.parent / "prompts" / "runtime" / "historian.md"
+                system = p2.read_text(encoding="utf-8") if p2.exists() else "You are the Engineering Historian."
+        except Exception:
+            p = Path(__file__).parent.parent / "prompts" / "parent" / "historian.md"
+            system = p.read_text(encoding="utf-8") if p.exists() else _load_prompt("parent/historian") or "You are the Engineering Historian. Create a milestone document."
         prev_text = "\n\n---\n\n".join(ctx.previous_milestones[-2:]) if ctx.previous_milestones else "(none)"
         user = (
             f"Task:\n{ctx.task}\n\n"

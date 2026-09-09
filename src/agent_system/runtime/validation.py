@@ -6,9 +6,19 @@ from agent_system.contracts.validation import ValidationCheckResult, ValidationR
 
 
 def _validation_system_prompt() -> str:
+    try:
+        from agent_system.prompts.registry import PromptRegistry
+        text = PromptRegistry.validation_system()
+        if text:
+            return text
+    except Exception:
+        pass
     p = Path(__file__).parent.parent / "prompts" / "validation" / "system.md"
     if p.exists():
         return p.read_text(encoding="utf-8")
+    p2 = Path(__file__).parent.parent / "prompts" / "agents" / "validation" / "system.md"
+    if p2.exists():
+        return p2.read_text(encoding="utf-8")
     return (
         "You are a verification agent.\n\n"
         "Your job is to independently verify whether the current repository state\n"

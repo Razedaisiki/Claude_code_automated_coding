@@ -16,6 +16,22 @@ class PlanningError(RuntimeError):
 
 
 def _load_prompt(name: str) -> str:
+    from agent_system.prompts.registry import PromptRegistry
+    mapping = {
+        "planning": PromptRegistry.planning_prompt("system"),
+        "planning_skeleton": PromptRegistry.planning_prompt("skeleton"),
+        "planning_refine": PromptRegistry.planning_prompt("refine"),
+        "planning_enrich": PromptRegistry.planning_prompt("enrich"),
+        "planning_repair": PromptRegistry.planning_prompt("repair"),
+    }
+    if name in mapping and mapping[name]:
+        return mapping[name]
+    # Fallback for other stage names
+    if name.startswith("planning_"):
+        short = name.replace("planning_", "")
+        text = PromptRegistry.planning_prompt(short)
+        if text:
+            return text
     base = Path(__file__).parent.parent / "prompts" / "parent"
     for fname in [f"{name}.md", f"{name}", name]:
         p = base / fname

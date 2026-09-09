@@ -24,13 +24,21 @@ class ClaudeCodeBackend:
         return capture_task_baseline(self.root, task)
 
     def _build_prompt(self, task: AgentTask, baseline, context: ProjectContext) -> str:
-        base = Path(__file__).parent.parent.parent / "prompts"
-        parts = []
-        for p in [base / "code.md", base / "code" / "system.md", base / "code" / "execution.md"]:
-            if p.exists():
-                parts.append(p.read_text(encoding="utf-8"))
-        if parts and (base / "common" / "engineering_rules.md").exists():
-            parts.append((base / "common" / "engineering_rules.md").read_text(encoding="utf-8"))
+        try:
+            from agent_system.prompts.registry import PromptRegistry
+            coding = PromptRegistry.coding_prompts_combined()
+            if coding:
+                parts = [coding]
+            else:
+                raise ImportError
+        except Exception:
+            base = Path(__file__).parent.parent.parent / "prompts"
+            parts = []
+            for p in [base / "code.md", base / "code" / "system.md", base / "code" / "execution.md", base / "agents" / "coding" / "system.md", base / "agents" / "coding" / "execution.md", base / "agents" / "coding" / "code.md"]:
+                if p.exists():
+                    parts.append(p.read_text(encoding="utf-8"))
+            if parts and (base / "common" / "engineering_rules.md").exists():
+                parts.append((base / "common" / "engineering_rules.md").read_text(encoding="utf-8"))
         system = "\n\n".join(parts)
         baseline_lines = []
         for rel, snap in (baseline.files or {}).items():
