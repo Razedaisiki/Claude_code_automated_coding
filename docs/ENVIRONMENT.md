@@ -8,32 +8,14 @@ Requires `curl` + `unzip` on Linux. User-local install, no `sudo`.
 
 ```bash
 curl -fsSL https://bun.com/install | bash
-```
-
-```bash
 cat >> ~/.bashrc <<'EOF'
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 EOF
-```
-
-```bash
 source ~/.bashrc
-```
-
-```bash
 bun --version
-```
-
-```bash
 bun add -g --trust @anthropic-ai/claude-code
-```
-
-```bash
 claude --version && claude doctor
-```
-
-```bash
 claude -p "reply OK"
 ```
 
