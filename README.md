@@ -142,7 +142,7 @@ dpkg-deb -x ./bubblewrap_*.deb "$HOME/.local/opt/workflow-deps"
 dpkg-deb -x ./socat_*.deb "$HOME/.local/opt/workflow-deps"
 ```
 
-Expose executables on `PATH`:
+Expose executables on `PATH` and make it permanent:
 
 ```bash
 ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/bwrap" "$HOME/.local/bin/bwrap"
@@ -152,11 +152,21 @@ ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/bwrap" "$HOME/.local/bin/bwrap"
 ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/socat" "$HOME/.local/bin/socat"
 ```
 
+Add to your shell startup file so the change persists across sessions:
+
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ```
 
-To make this permanent, add the same line to `~/.bashrc` or `~/.zshrc` (do not edit automatically).
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+Apply immediately without restarting the shell:
+
+```bash
+source ~/.bashrc  # or source ~/.zshrc if using zsh
+```
 
 Verify:
 
