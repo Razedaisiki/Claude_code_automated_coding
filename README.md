@@ -70,6 +70,84 @@ Optional Anthropic configuration:
 - `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL`
 - `ANTHROPIC_BASE_URL`
 
+### Claude Code user config (`~/.claude`)
+
+Claude Code reads user-level settings from `~/.claude/settings.json` — shared across all projects (no per-project file needed). Create/edit it directly:
+
+```bash
+mkdir -p ~/.claude && chmod 700 ~/.claude
+```
+
+```bash
+vi ~/.claude/settings.json && chmod 600 ~/.claude/settings.json
+```
+
+Minimal shape (Anthropic; DeepSeek-compatible base URL shown as an example — use your provider's URL/model/keys):
+
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "<DEEPSEEK_API_KEY>",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max",
+    "DISABLE_AUTOUPDATER": "1"
+  }
+}
+```
+
+### Claude Code via Bun (user-local, no sudo)
+
+Requires `curl` + `unzip` on Linux. Bun's installer is user-local; no `sudo`/`/usr/local` write needed. The Claude Code global CLI lands in `~/.bun/bin`.
+
+**One-click install:**
+
+```bash
+bash scripts/install-claude-code.sh
+```
+
+The script installs Bun if missing, persists `BUN_INSTALL`/`PATH` to whichever of `~/.bashrc`/`~/.zshrc` exists (`~/.bashrc` if neither), runs `bun add -g --trust @anthropic-ai/claude-code`, and verifies `claude doctor`. Re-running it is idempotent; upgrade via `bun add -g --trust @anthropic-ai/claude-code@latest` / `bun upgrade`.
+
+Expected paths: `~/.bun/bin/bun`, `~/.bun/bin/claude`, `~/.claude/settings.json`.
+
+Manual steps (equivalent to the script):
+
+```bash
+curl -fsSL https://bun.com/install | bash
+```
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+EOF
+```
+
+```bash
+source ~/.bashrc
+```
+
+```bash
+bun --version
+```
+
+```bash
+bun add -g --trust @anthropic-ai/claude-code
+```
+
+```bash
+claude --version && claude doctor
+```
+
+```bash
+claude -p "reply OK"
+```
+
 ### Linux sandbox dependencies
 
 On Linux, Workflow's Claude Code sandbox requires `bwrap` and `socat`. The Debian/Ubuntu package `bubblewrap` installs the `bwrap` executable (package name `bubblewrap` ≠ executable `bwrap`).
