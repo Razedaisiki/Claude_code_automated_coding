@@ -1,3 +1,13 @@
+# Workflow 1.0.2
+
+## Changes from 1.0.1
+
+- Docs: extract environment-specific setup (Bun, Claude Code, Linux `bwrap`/`socat`) from `README.md#Requirements` into `docs/ENVIRONMENT.md` (one-block-per-step manual descriptions preserved)
+- Scripts: add `scripts/install-claude-code.sh` (consecutive commands from `ENVIRONMENT.md`)
+- Scripts: simplify `scripts/install-sandbox-deps.sh` to concise consecutive commands
+
+---
+
 # Workflow 1.0.1
 
 ## Changes from 1.0.0
