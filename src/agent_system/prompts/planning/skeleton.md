@@ -18,11 +18,14 @@ Return JSON only:
 
 Rules:
 
-- Maximize useful decomposition. Do not minimize task count as a goal.
-- Split whenever the request contains multiple independently understandable, independently reviewable responsibilities.
+- Decompose based on actual engineering responsibilities in the request and repository.
+- A task is warranted only if it has deliverable, independently verifiable content.
+- If no further meaningful split exists, return fewer tasks. Do not pad.
+- Maximize useful decomposition when genuinely warranted; do not inflate count.
+- Split only when the request contains multiple independently understandable, independently reviewable responsibilities.
 - Do not merge responsibilities merely because they could be committed together.
-- A project-scale request may reasonably require 10-30 or more tasks. 10-25 is common for project-scale work.
+- For large multi-module requests, multiple tasks may be warranted, but only as many as justified by distinct responsibilities.
 - Do not create procedure tasks (inspect, run tests, review, create directories, think).
 - Tests required for an implementation belong to the same task.
-- Return a useful number of skeleton entries in executable dependency order.
+- Return only as many skeleton entries as justified, in executable dependency order.
 - Never exceed the configured safety limit supplied in the request.
