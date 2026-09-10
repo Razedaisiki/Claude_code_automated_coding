@@ -1,25 +1,6 @@
 # Environment
 
-## Requirements
-
-- Python >= 3.8
-- Git
-- Claude Code >= 2.1.248
-- Anthropic credentials
-- On Linux: `bubblewrap` (provides `bwrap`) and `socat` for the Claude Code sandbox
-
-GitHub delivery (`workflow remote gh`) additionally:
-
-- Git remote configured
-- GitHub CLI (`gh`) installed
-- `gh` authenticated (`gh auth status`)
-
-Credentials from `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` or `~/.claude/settings.json`.
-
-Optional:
-
-- `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL`
-- `ANTHROPIC_BASE_URL`
+Environment-specific setup: Bun, Claude Code, and the Linux sandbox (`bwrap`/`socat`). For the remaining project requirements (Python, Git, credentials, Anthropic options, GitHub delivery), see `README.md#Requirements`.
 
 ## Claude Code via Bun (user-local, no sudo)
 

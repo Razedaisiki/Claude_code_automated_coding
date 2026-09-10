@@ -51,7 +51,26 @@ Each task either results in **`CHANGED`** (commit) or **`SATISFIED`** (already s
 
 ## Requirements
 
-See [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for full environment setup (Python, Git, Claude Code via Bun, credentials, Anthropic options, and Linux sandbox `bwrap`/`socat` with/without `sudo`).
+- Python >= 3.8
+- Git
+- Claude Code >= 2.1.248
+- Anthropic credentials
+- On Linux: `bubblewrap` (provides `bwrap`) and `socat` for the Claude Code sandbox
+
+For GitHub delivery (`workflow remote gh`) additionally:
+
+- Git remote configured
+- GitHub CLI (`gh`) installed
+- `gh` authenticated (`gh auth status`)
+
+Credentials may come from `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, or from `~/.claude/settings.json`.
+
+Optional Anthropic configuration:
+
+- `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_SONNET_MODEL`
+- `ANTHROPIC_BASE_URL`
+
+> Environment-specific setup — Bun install, Claude Code install, and Linux sandbox `bwrap`/`socat` (with/without `sudo`) — has been extracted to [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ---
 
