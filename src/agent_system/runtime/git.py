@@ -44,6 +44,8 @@ class Git:
         self.root = (Path(root or Path.cwd())).resolve()
         self.repo_root = self.root
         self.shell = Shell(self.root)
+        self._last_commit_error = ""
+        self._last_update_ref_error = ""
 
     def ensure_runtime_excludes(self):
         git_dir = self.root / ".git"
@@ -64,22 +66,34 @@ class Git:
     def is_workspace_repo(self) -> bool:
         return self._check_workspace_repo()
 
-    def ensure_runtime_isolation(self):
+    def ensure_runtime_isolation(self) -> str:
         if not self._check_workspace_repo():
-            return False
+            return "Workspace is not a Git repository."
         self.ensure_runtime_excludes()
         r = self.shell.run("git ls-files -- .agent")
         if r.returncode != 0:
-            return False
+            msg = (r.stderr or r.stdout).strip()[:300] or f"git ls-files failed ({r.returncode})"
+            # Not fatal: .agent may not be tracked yet
+            return ""
         tracked = r.stdout.strip()
         if not tracked:
-            return True
+            return ""
         print("Agent runtime files were tracked by Git. Removing .agent from the repository index.")
-        self.shell.run("git rm -r --cached --ignore-unmatch .agent")
+        rm = self.shell.run("git rm -r --cached --ignore-unmatch .agent")
+        if rm.returncode != 0:
+            msg2 = (rm.stderr or rm.stdout).strip()[:300] or f"git rm --cached .agent failed ({rm.returncode})"
+            print(f"Warning: {msg2}")
+            return ""
         r2 = self.shell.run("git ls-files -- .agent")
-        if r2.returncode == 0 and r2.stdout.strip():
-            print(f"  Warning: still tracked: {r2.stdout.strip()[:80]}")
-        return True
+        if r2.returncode != 0:
+            msg3 = (r2.stderr or r.stdout).strip()[:300] or f"git ls-files re-check failed ({r2.returncode})"
+            print(f"Warning: {msg3}")
+            return ""
+        if r2.stdout.strip():
+            msg4 = f"still tracked: {r2.stdout.strip()[:80]}"
+            print(f"  Warning: {msg4}")
+            return ""
+        return ""
 
     def _check_workspace_repo(self) -> bool:
         r = self.shell.run("git rev-parse --show-toplevel")
@@ -264,6 +278,8 @@ class Git:
         if head:
             r = shell.run(["git", "read-tree", "HEAD"], env=env)
             if r.returncode != 0:
+                err = (r.stderr.strip() or r.stdout.strip())[:300]
+                print(f"Warning: snapshot read-tree HEAD failed ({r.returncode}): {err}")
                 try:
                     import shutil
                     shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -271,16 +287,24 @@ class Git:
                     pass
                 return ""
         else:
-            shell.run(["git", "read-tree", "--empty"], env=env)
-        shell.run(["git", "add", "-A", "--", "."], env=env)
+            re = shell.run(["git", "read-tree", "--empty"], env=env)
+            if re.returncode != 0:
+                print(f"Warning: snapshot read-tree --empty failed ({re.returncode}): {(re.stderr.strip() or re.stdout.strip())[:300]}")
+        ar = shell.run(["git", "add", "-A", "--", "."], env=env)
+        if ar.returncode != 0:
+            print(f"Warning: snapshot add failed ({ar.returncode}): {(ar.stderr.strip() or ar.stdout.strip())[:300]}")
         wr = shell.run(["git", "write-tree"], env=env)
         tree = ""
         if wr.returncode == 0 and wr.stdout.strip():
             tree = wr.stdout.strip()
         else:
+            if wr.returncode != 0:
+                print(f"Warning: snapshot write-tree failed ({wr.returncode}): {(wr.stderr.strip() or wr.stdout.strip())[:300]}")
             wr2 = shell.run(["git", "write-tree"], env=env)
             if wr2.returncode == 0 and wr2.stdout.strip():
                 tree = wr2.stdout.strip()
+            elif wr2.returncode != 0:
+                print(f"Warning: snapshot write-tree retry failed ({wr2.returncode}): {(wr2.stderr.strip() or wr2.stdout.strip())[:300]}")
         try:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -324,8 +348,33 @@ class Git:
         has = bool(diff.strip()) or bool(files) or tree != base_tree
         return GitTreeSnapshot(base_commit_sha=head or "", base_tree_sha=base_tree, tree_sha=tree, diff=diff, changed_files=files, has_changes=has)
 
+    def _ensure_git_identity(self) -> str:
+        name = self.shell.run(["git", "config", "--get", "user.name"]).stdout.strip()
+        email = self.shell.run(["git", "config", "--get", "user.email"]).stdout.strip()
+        if name and email:
+            return ""
+        # Try to derive from existing ident or fallback
+        fallback_name = name or "workflow"
+        fallback_email = email or "workflow@local"
+        # Attempt local config for this repo so SSH sessions work without global config
+        if not name:
+            self.shell.run(["git", "config", "user.name", fallback_name])
+        if not email:
+            self.shell.run(["git", "config", "user.email", fallback_email])
+        # Re-check
+        name2 = self.shell.run(["git", "config", "--get", "user.name"]).stdout.strip()
+        email2 = self.shell.run(["git", "config", "--get", "user.email"]).stdout.strip()
+        if not name2 or not email2:
+            return "Git identity not configured. Run: git config --global user.name \"Your Name\" && git config --global user.email \"you@example.com\""
+        return ""
+
     def create_commit_object(self, tree_sha: str, parent_sha: str, message: str) -> str:
         if not tree_sha or not message:
+            return ""
+        ident_err = self._ensure_git_identity()
+        if ident_err:
+            # Expose via stderr-like return for caller to surface
+            self._last_commit_error = ident_err
             return ""
         tmp = None
         try:
@@ -340,7 +389,12 @@ class Git:
             args += ["-F", tmp]
             r = self.shell.run(args)
             if r.returncode != 0:
+                err = (r.stderr.strip() or r.stdout.strip())[:400]
+                if "unable to auto-detect email" in err or "empty ident" in err:
+                    err += " — fix: git config --global user.name \"Your Name\" && git config --global user.email \"you@example.com\""
+                self._last_commit_error = err or "commit-tree failed"
                 return ""
+            self._last_commit_error = ""
             return r.stdout.strip()
         finally:
             if tmp:
@@ -351,11 +405,17 @@ class Git:
 
     def update_ref(self, ref: str, new_sha: str, old_sha: str = None) -> bool:
         if not ref or not new_sha:
+            self._last_update_ref_error = "Missing ref or sha"
             return False
         if old_sha:
             r = self.shell.run(["git", "update-ref", ref, new_sha, old_sha])
         else:
             r = self.shell.run(["git", "update-ref", ref, new_sha])
+        if r.returncode != 0:
+            self._last_update_ref_error = (r.stderr.strip() or r.stdout.strip())[:400]
+            print(f"Warning: update-ref failed ({r.returncode}): {self._last_update_ref_error}")
+        else:
+            self._last_update_ref_error = ""
         return r.returncode == 0
 
     def sync_index_to_head(self):
@@ -445,14 +505,16 @@ class Git:
             return {"status": "FAILED", "returncode": 1, "sha": None, "message": "detached HEAD not supported"}
         pending = self.create_commit_object(snap.tree_sha, head, message)
         if not pending:
-            return {"status": "FAILED", "returncode": 1, "sha": None, "message": "commit-tree failed"}
+            err = getattr(self, "_last_commit_error", "") or "commit-tree produced no commit object"
+            return {"status": "FAILED", "returncode": 1, "sha": None, "message": err}
         # verify
         tree_check = self.commit_tree_sha(pending)
         if tree_check != snap.tree_sha:
             return {"status": "FAILED", "returncode": 1, "sha": pending, "message": f"commit tree mismatch: {tree_check} != {snap.tree_sha}"}
         ok = self.update_ref(ref, pending, head) if head else self.update_ref(ref, pending)
         if not ok:
-            return {"status": "FAILED", "returncode": 1, "sha": pending, "message": "update-ref failed (branch changed externally?)"}
+            err2 = getattr(self, "_last_update_ref_error", "") or "branch changed externally?"
+            return {"status": "FAILED", "returncode": 1, "sha": pending, "message": f"update-ref failed: {err2}"}
         self.sync_index_to_head()
         return {"status": "SUCCESS", "returncode": 0, "sha": pending, "message": ""}
 

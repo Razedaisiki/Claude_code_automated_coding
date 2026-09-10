@@ -157,11 +157,8 @@ class TaskRuntime:
                             pass
                         raise
                     finally:
-                        if exc_to_raise is None:
-                            git_after = capture_git_control_state(self.root)
-                            violation = validate_unchanged(git_before, git_after)
-                            if violation:
-                                return AgentResult(status="FAILED", message=violation, artifacts=[], baseline=getattr(result, "baseline", None) if result else None, evidence=getattr(result, "evidence", None) if result else None, execution_status="ERROR", stop_reason="runtime_authority_violation")
+                        # Avoid return-in-finally warning: just record violations, handle after.
+                        pass
                     if exc_to_raise is not None:
                         raise exc_to_raise
                     git_after = capture_git_control_state(self.root)
@@ -171,6 +168,15 @@ class TaskRuntime:
                 else:
                     return AgentResult(status="FAILED", message=f"unsupported task role: {exec_task.role}", artifacts=[])
                 if getattr(result, "execution_status", "COMPLETED") == "ERROR" or result.status in ("FAILED", "INCOMPLETE"):
+                    msg = getattr(result, "message", "") or ""
+                    is_api_overload = "529" in msg or "Overloaded" in msg or "at capacity" in msg
+                    if is_api_overload:
+                        attempt = int(delivery.get("review_attempt", 1))
+                        if attempt < MAX_REVIEW_ATTEMPTS:
+                            reason = f"API overloaded (529), retrying: {msg[:200]}"
+                            print(f"  CodeAgent overloaded, retrying execution (attempt {attempt} -> {attempt+1})")
+                            ckpt.set_phase(TaskPhase.EXECUTING, review_attempt=attempt + 1, last_review_reason=reason, candidate_ref=None, validation_ref=None, review_package_ref=None, reviewed_tree_sha=None, base_commit_sha=None, review_decision=None)
+                            continue
                     return AgentResult(status="FAILED", message=result.message, artifacts=result.artifacts)
                 snap = self.git.capture_tree_snapshot()
                 from agent_system.agents.models import execution_evidence_to_dict
@@ -511,7 +517,8 @@ class TaskRuntime:
                 if not pending_sha:
                     pending_sha = self.git.create_commit_object(tree_sha, pre_sha, pending)
                     if not pending_sha:
-                        return AgentResult(status="FAILED", message=f"commit failed for {original.id}: commit-tree failed", artifacts=[])
+                        err = getattr(self.git, "_last_commit_error", "") or "commit-tree produced no commit object"
+                        return AgentResult(status="FAILED", message=f"commit failed for {original.id}: {err}", artifacts=[])
                     ct = self.git.commit_tree_sha(pending_sha)
                     if ct != tree_sha:
                         return AgentResult(status="FAILED", message="commit tree mismatch", artifacts=[])
@@ -519,7 +526,8 @@ class TaskRuntime:
                     ckpt.update_delivery(commit_intent=commit_intent, pending_commit_sha=pending_sha)
                 ok = self.git.update_ref(head_ref, pending_sha, pre_sha) if pre_sha else self.git.update_ref(head_ref, pending_sha)
                 if not ok:
-                    return AgentResult(status="FAILED", message="update-ref failed (branch changed externally?)", artifacts=[])
+                    err2 = getattr(self.git, "_last_update_ref_error", "") or "branch changed externally?"
+                    return AgentResult(status="FAILED", message=f"update-ref failed: {err2}", artifacts=[])
                 self.git.sync_index_to_head()
                 new_head = self.git.head_sha()
                 if new_head != pending_sha:

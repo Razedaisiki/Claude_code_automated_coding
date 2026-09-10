@@ -145,13 +145,19 @@ class Supervisor:
                 head_ref = "refs/heads/main"
             pending = git.create_commit_object(tree_sha, parent, msg)
             if not pending:
-                print(f"Pre-workflow snapshot FAILED: commit-tree failed")
+                err = getattr(git, "_last_commit_error", "") or "commit-tree produced no commit object"
+                print(f"Pre-workflow snapshot FAILED: commit-tree failed — {err}")
+                if "Git identity" in err or "user.name" in err:
+                    print("Hint: SSH sessions often lack global git identity. Run:")
+                    print("  git config --global user.name \"Your Name\"")
+                    print("  git config --global user.email \"you@example.com\"")
                 self.state.update(event="workflow_failed", status="FAILED")
                 print(f"State {self.state.load()['status']}")
                 return
             ok = git.update_ref(head_ref, pending, parent) if parent else git.update_ref(head_ref, pending)
             if not ok:
-                print(f"Pre-workflow snapshot FAILED: update-ref failed")
+                err2 = getattr(git, "_last_update_ref_error", "") or "unknown"
+                print(f"Pre-workflow snapshot FAILED: update-ref failed — {err2}")
                 self.state.update(event="workflow_failed", status="FAILED")
                 print(f"State {self.state.load()['status']}")
                 return
