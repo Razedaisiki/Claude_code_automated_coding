@@ -26,21 +26,8 @@ claude -p "reply OK"
 ### With sudo — recommended
 
 ```bash
-sudo apt update
-```
-
-```bash
-sudo apt install bubblewrap socat
-```
-
-Verify:
-
-```bash
-bwrap --version
-```
-
-```bash
-socat -V
+sudo apt update && sudo apt install bubblewrap socat
+bwrap --version && socat -V
 ```
 
 ### Without sudo — Debian/Ubuntu
@@ -57,117 +44,31 @@ The script downloads `bubblewrap`/`socat` without `sudo`, extracts into `~/.loca
 
 Manual steps (equivalent to the script):
 
-Create local directories:
-
 ```bash
-mkdir -p "$HOME/.local/bin"
-```
-
-```bash
-mkdir -p "$HOME/.local/opt/workflow-deps"
-```
-
-Create a local download directory:
-
-```bash
-mkdir -p "$HOME/.cache/workflow-deps"
-```
-
-```bash
+mkdir -p "$HOME/.local/bin" "$HOME/.local/opt/workflow-deps" "$HOME/.cache/workflow-deps"
 cd "$HOME/.cache/workflow-deps"
-```
-
-```bash
-rm -f "$HOME/.cache/workflow-deps"/bubblewrap_*.deb "$HOME/.cache/workflow-deps"/socat_*.deb
-```
-
-Download packages without installing system-wide:
-
-```bash
-apt-get download bubblewrap
-```
-
-```bash
-apt-get download socat
-```
-
-Extract into the user-local prefix:
-
-```bash
+rm -f bubblewrap_*.deb socat_*.deb
+apt-get download bubblewrap socat
 dpkg-deb -x ./bubblewrap_*.deb "$HOME/.local/opt/workflow-deps"
-```
-
-```bash
 dpkg-deb -x ./socat_*.deb "$HOME/.local/opt/workflow-deps"
-```
-
-Expose executables on `PATH` and make it permanent (auto-detect shell config):
-
-```bash
 ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/bwrap" "$HOME/.local/bin/bwrap"
-```
-
-```bash
 ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/socat" "$HOME/.local/bin/socat"
-```
-
-```bash
 LINE='export PATH="$HOME/.local/bin:$PATH"'
-```
-
-```bash
 for rc in ~/.bashrc ~/.zshrc; do [ -f "$rc" ] && grep -Fq "$LINE" "$rc" 2>/dev/null || { [ -f "$rc" ] && printf '\n%s\n' "$LINE" >> "$rc"; }; done
-```
-
-Apply immediately without restarting the shell:
-
-```bash
 export PATH="$HOME/.local/bin:$PATH"
+command -v bwrap && command -v socat
+bwrap --version && socat -V
 ```
 
-Verify:
+Expected paths: `~/.local/bin/bwrap`, `~/.local/bin/socat`.
 
-```bash
-command -v bwrap
-```
-
-```bash
-command -v socat
-```
-
-```bash
-bwrap --version
-```
-
-```bash
-socat -V
-```
-
-Expected paths:
-
-```text
-/home/<user>/.local/bin/bwrap
-/home/<user>/.local/bin/socat
-```
-
-Check shared-library dependencies:
-
-```bash
-ldd "$(command -v bwrap)"
-```
-
-```bash
-ldd "$(command -v socat)"
-```
+Shared-library check:
 
 ```bash
 ldd "$(command -v bwrap)" | grep "not found"
-```
-
-```bash
 ldd "$(command -v socat)" | grep "not found"
 ```
 
-If nothing is printed by `grep "not found"`, no missing libraries were detected. If libraries are missing, the extracted package alone is insufficient — ask the administrator to provide the runtime libraries or use another compatible environment. Do not attempt manual recursive dependency extraction here.
+If nothing is printed, no missing libraries. If any are missing, ask the administrator for runtime libraries — do not manually chase transitive dependencies.
 
-> Installing `bwrap` is not always sufficient. Bubblewrap relies on Linux user namespaces. If the host or administrator disables unprivileged user namespaces, a user-local `bwrap` cannot override that kernel/security policy.
+> Installing `bwrap` is not always sufficient. Bubblewrap relies on Linux user namespaces. If the host disables unprivileged user namespaces, a user-local `bwrap` cannot override that policy.
