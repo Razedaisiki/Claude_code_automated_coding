@@ -98,6 +98,16 @@ socat -V
 
 This option uses user-local extraction via `apt-get`/`dpkg-deb`. It requires those tools and is not universal; administrators may restrict package access.
 
+**One-click install:**
+
+```bash
+bash scripts/install-sandbox-deps.sh
+```
+
+The script downloads `bubblewrap`/`socat` without `sudo`, extracts them into `~/.local/opt/workflow-deps`, symlinks `bwrap`/`socat` into `~/.local/bin`, auto-detects `~/.bashrc`/`~/.zshrc` (writes to whichever exists, `$HOME/.bashrc` if neither), and exports `PATH` for the current shell. Re-running it is idempotent.
+
+Manual steps (equivalent to the script):
+
 Create local directories:
 
 ```bash
@@ -142,7 +152,7 @@ dpkg-deb -x ./bubblewrap_*.deb "$HOME/.local/opt/workflow-deps"
 dpkg-deb -x ./socat_*.deb "$HOME/.local/opt/workflow-deps"
 ```
 
-Expose executables on `PATH` and make it permanent:
+Expose executables on `PATH` and make it permanent (auto-detect shell config):
 
 ```bash
 ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/bwrap" "$HOME/.local/bin/bwrap"
@@ -152,20 +162,18 @@ ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/bwrap" "$HOME/.local/bin/bwrap"
 ln -sf "$HOME/.local/opt/workflow-deps/usr/bin/socat" "$HOME/.local/bin/socat"
 ```
 
-Add to your shell startup file so the change persists across sessions:
-
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+LINE='export PATH="$HOME/.local/bin:$PATH"'
 ```
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+for rc in ~/.bashrc ~/.zshrc; do [ -f "$rc" ] && grep -Fq "$LINE" "$rc" 2>/dev/null || { [ -f "$rc" ] && printf '\n%s\n' "$LINE" >> "$rc"; }; done
 ```
 
 Apply immediately without restarting the shell:
 
 ```bash
-source ~/.bashrc  # or source ~/.zshrc if using zsh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Verify:
