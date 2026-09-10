@@ -12,18 +12,38 @@ Requires `curl` + `unzip` on Linux. User-local install, no `sudo`.
 bash scripts/install-claude-code.sh
 ```
 
-Re-running is idempotent — strings together the manual steps below.
+The script strings together the manual steps below. Re-running is idempotent.
+
+Manual steps:
 
 ```bash
 curl -fsSL https://bun.com/install | bash
+```
+
+```bash
 cat >> ~/.bashrc <<'EOF'
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 EOF
+```
+
+```bash
 source ~/.bashrc
+```
+
+```bash
 bun --version
+```
+
+```bash
 bun add -g --trust @anthropic-ai/claude-code
+```
+
+```bash
 claude --version && claude doctor
+```
+
+```bash
 claude -p "reply OK"
 ```
 
